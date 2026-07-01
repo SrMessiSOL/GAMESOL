@@ -140,7 +140,7 @@ pub fn initialize_homeworld(
         research_queue_item: 255, research_queue_target: 0, research_finish_ts: 0,
         build_queue_item: 255, build_queue_target: 0, build_finish_ts: 0,
         ship_build_item: 255, ship_build_qty: 0, ship_build_finish_ts: 0,
-        metal: 1_000_000, crystal: 1_000_000, deuterium: 1_000_000,
+        metal: 500, crystal: 500, deuterium: 0,
         metal_hour: 33, crystal_hour: 22, deuterium_hour: 14,
         energy_production: 22, energy_consumption: 42,
         metal_cap: 1_000_000, crystal_cap: 1_000_000, deuterium_cap: 1_000_000,
