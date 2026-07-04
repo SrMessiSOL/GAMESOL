@@ -3,8 +3,6 @@
 members = [
     "programs/game-state",
     "programs/market",
-    "programs/private-state",
-
 ]
 resolver = "2"
 

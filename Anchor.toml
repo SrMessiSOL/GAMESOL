@@ -12,13 +12,11 @@ wallet = "~/.config/solana/devnet.json"
 [programs.devnet]
 game_state = "FJGxh6SKgNoTVzHj98oBsC2oaEy8ovadVJf8rDUNaEHb"
 market = "Dow7f1UqLGKyvs1D2uNR5c6bmAdnKRy2ZDtnsa4UhApp"
-private_state = "P8gtUdeBpt6oG5a7LFQbxnHJbLyc9X9BhTj8iz8pSn1"
 
 [workspace]
 members = [
     "programs/game-state",
     "programs/market",
-    "programs/private-state",
 ]
 
 [scripts]
