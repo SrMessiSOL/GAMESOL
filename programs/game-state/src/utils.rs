@@ -2917,8 +2917,8 @@ pub(crate) fn resolve_transport_planets(
             mission.cargo_deuterium,
         )?;
 
-        if destination.authority == source.authority {
-            // Same owner: ships stay at destination and mission ends here.
+        if destination.authority == source.authority && destination.shipyard > 0 {
+            // Same owner with shipyard: ships can be stationed at destination.
             destination.small_cargo = destination.small_cargo.saturating_add(mission.small_cargo);
             destination.large_cargo = destination.large_cargo.saturating_add(mission.large_cargo);
             destination.light_fighter = destination
@@ -2946,7 +2946,7 @@ pub(crate) fn resolve_transport_planets(
             return Ok(());
         }
 
-        // Different owner: deduct return fuel from source planet.
+        // Different owner, or own planet without a shipyard: unload cargo and return ships.
         let return_fuel = launch_fuel_cost(
             mission.light_fighter,
             mission.heavy_fighter,
@@ -3247,6 +3247,19 @@ mod tests {
         }
     }
 
+    fn transport_mission(target: &PlanetState) -> MissionState {
+        MissionState {
+            mission_type: MISSION_TRANSPORT,
+            target_galaxy: target.galaxy,
+            target_system: target.system,
+            target_position: target.position,
+            depart_ts: 10,
+            arrive_ts: 20,
+            speed_factor: 100,
+            ..MissionState::default()
+        }
+    }
+
     fn coords_for(planet: &PlanetState) -> PlanetCoordinates {
         PlanetCoordinates {
             galaxy: planet.galaxy,
@@ -3351,6 +3364,71 @@ mod tests {
         assert!(mixed.is_err());
         assert_eq!(planet.espionage_probe, 3);
         assert_eq!(planet.light_fighter, 1);
+    }
+
+    #[test]
+    fn same_owner_transport_stations_ships_only_with_destination_shipyard() {
+        let owner = Pubkey::new_unique();
+        let mut source = test_planet();
+        source.authority = owner;
+
+        let mut destination = test_planet();
+        destination.authority = owner;
+        destination.galaxy = 2;
+        destination.system = 2;
+        destination.position = 2;
+        destination.shipyard = 1;
+
+        source.missions[0] = MissionState {
+            small_cargo: 1,
+            cargo_metal: 100,
+            ..transport_mission(&destination)
+        };
+        source.active_missions = 1;
+
+        resolve_transport_planets(&mut source, &mut destination, 0, 20).unwrap();
+
+        assert_eq!(source.active_missions, 0);
+        assert_eq!(source.missions[0].mission_type, 0);
+        assert_eq!(destination.small_cargo, 1);
+        assert_eq!(destination.metal, 100);
+    }
+
+    #[test]
+    fn same_owner_transport_without_destination_shipyard_returns_ships() {
+        let owner = Pubkey::new_unique();
+        let mut source = test_planet();
+        source.authority = owner;
+        source.deuterium = 10_000;
+
+        let mut destination = test_planet();
+        destination.authority = owner;
+        destination.galaxy = 2;
+        destination.system = 2;
+        destination.position = 2;
+        destination.shipyard = 0;
+
+        source.missions[0] = MissionState {
+            small_cargo: 1,
+            cargo_metal: 100,
+            ..transport_mission(&destination)
+        };
+        source.active_missions = 1;
+
+        resolve_transport_planets(&mut source, &mut destination, 0, 20).unwrap();
+
+        assert_eq!(destination.small_cargo, 0);
+        assert_eq!(destination.metal, 100);
+        assert!(source.missions[0].applied);
+        assert_eq!(source.missions[0].cargo_metal, 0);
+        assert!(source.missions[0].return_ts > 20);
+
+        let return_ts = source.missions[0].return_ts;
+        resolve_transport_planets(&mut source, &mut destination, 0, return_ts).unwrap();
+
+        assert_eq!(source.active_missions, 0);
+        assert_eq!(source.small_cargo, 1);
+        assert_eq!(source.missions[0].mission_type, 0);
     }
 
     #[test]

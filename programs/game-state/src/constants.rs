@@ -1,10 +1,10 @@
 use anchor_lang::prelude::*;
 
 use crate::state::{
-    AllianceJoinRequest, AllianceMembership, AllianceMetadata, AllianceState, AllianceTreasuryState,
-    AuthorizedVault, GameConfig, PlanetCoordinates, PlanetState, PlayerProfile,
-    PublicPlanetCoordinates, PublicPlanetState, QuestProgressState, QuestState, StoreConfig,
-    StorePurchaseState, VaultBackup,
+    AllianceJoinRequest, AllianceMembership, AllianceMetadata, AllianceState,
+    AllianceTreasuryState, AuthorizedVault, GameConfig, PlanetCoordinates, PlanetState,
+    PlayerProfile, PublicPlanetCoordinates, PublicPlanetState, QuestProgressState, QuestState,
+    StoreConfig, StorePurchaseState, VaultBackup,
 };
 
 pub const MAX_PLANET_NAME_LEN: usize = 32;
@@ -40,8 +40,8 @@ pub const ALLIANCE_DEPOSIT_XP_PER_RESOURCE_UNIT: u64 = 1_000;
 pub const ALLIANCE_DEPOSIT_XP_PER_ANTIMATTER_UNIT: u64 = ANTIMATTER_SCALE;
 pub const ALLIANCE_BUILDING_MAX_LEVEL: u8 = 25;
 pub const PROTOCOL_AUTHORITY: Pubkey = Pubkey::new_from_array([
-    203, 132, 160, 224, 36, 85, 73, 7, 47, 237, 167, 190, 14, 187, 187, 93, 163, 241, 26, 147,
-    33, 250, 136, 102, 231, 253, 14, 8, 203, 234, 209, 64,
+    203, 132, 160, 224, 36, 85, 73, 7, 47, 237, 167, 190, 14, 187, 187, 93, 163, 241, 26, 147, 33,
+    250, 136, 102, 231, 253, 14, 8, 203, 234, 209, 64,
 ]);
 pub const PROTOCOL_ANTIMATTER_MINT: Pubkey = Pubkey::new_from_array([
     210, 124, 79, 139, 189, 97, 171, 121, 236, 30, 15, 224, 71, 28, 151, 137, 112, 205, 123, 216,
@@ -76,6 +76,6 @@ pub const BASE_ALLIANCE_MAX_MEMBERS: u16 = 5;
 pub const ALLIANCE_MEMBERS_PER_LEVEL: u16 = 3;
 pub const ALLIANCE_XP_UNIT: u64 = 1_000;
 pub const MARKET_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    190, 82, 37, 232, 28, 50, 248, 91, 61, 49, 15, 43, 213, 115, 237, 81, 239, 139, 230, 221,
-    59, 251, 31, 76, 160, 16, 0, 153, 247, 21, 15, 41,
+    190, 82, 37, 232, 28, 50, 248, 91, 61, 49, 15, 43, 213, 115, 237, 81, 239, 139, 230, 221, 59,
+    251, 31, 76, 160, 16, 0, 153, 247, 21, 15, 41,
 ]);
