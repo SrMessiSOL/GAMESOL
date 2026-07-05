@@ -12,6 +12,7 @@ use crate::utils::require_protocol_antimatter_treasury;
 
 const PLANET_STATE_AUTHORITY_OFFSET: usize = 8;
 const PLANET_STATE_INDEX_OFFSET: usize = 72;
+const PLANET_STATE_ACTIVE_MISSIONS_OFFSET: usize = 406;
 const PLANET_COORDS_GALAXY_OFFSET: usize = 8;
 const PLANET_COORDS_SYSTEM_OFFSET: usize = 10;
 const PLANET_COORDS_POSITION_OFFSET: usize = 12;
@@ -28,7 +29,11 @@ fn read_pubkey_at(data: &[u8], offset: usize) -> Result<Pubkey> {
 fn validate_planet_authority(planet: &AccountInfo, expected_authority: Pubkey) -> Result<()> {
     let data = planet.try_borrow_data()?;
     let authority = read_pubkey_at(&data, PLANET_STATE_AUTHORITY_OFFSET)?;
-    require_keys_eq!(authority, expected_authority, MarketError::InvalidSellerPlanet);
+    require_keys_eq!(
+        authority,
+        expected_authority,
+        MarketError::InvalidSellerPlanet
+    );
     require!(
         data.len() >= PLANET_STATE_INDEX_OFFSET + 4,
         MarketError::InvalidSellerPlanet
@@ -37,6 +42,14 @@ fn validate_planet_authority(planet: &AccountInfo, expected_authority: Pubkey) -
     index_bytes.copy_from_slice(&data[PLANET_STATE_INDEX_OFFSET..PLANET_STATE_INDEX_OFFSET + 4]);
     let planet_index = u32::from_le_bytes(index_bytes);
     require!(planet_index > 0, MarketError::HomeworldNotSellable);
+    require!(
+        data.len() > PLANET_STATE_ACTIVE_MISSIONS_OFFSET,
+        MarketError::InvalidSellerPlanet
+    );
+    require!(
+        data[PLANET_STATE_ACTIVE_MISSIONS_OFFSET] == 0,
+        MarketError::PlanetHasActiveMissions
+    );
     Ok(())
 }
 
@@ -174,12 +187,21 @@ pub struct BuyPlanetListing<'info> {
     #[account(mut, address = listing.planet_coords @ MarketError::InvalidSellerPlanet, owner = GAME_STATE_PROGRAM_ID)]
     pub planet_coords: UncheckedAccount<'info>,
 
-    /// CHECK: buyer profile is validated by the game-state CPI.
+    /// CHECK: buyer profile is validated and updated by the game-state CPI.
+    #[account(mut)]
     pub buyer_profile: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
-pub fn create_planet_listing(ctx: Context<CreatePlanetListing>, price_antimatter: u64) -> Result<()> {
-    require!(price_antimatter >= ANTIMATTER_SCALE, MarketError::PriceTooLow);
+pub fn create_planet_listing(
+    ctx: Context<CreatePlanetListing>,
+    price_antimatter: u64,
+) -> Result<()> {
+    require!(
+        price_antimatter >= ANTIMATTER_SCALE,
+        MarketError::PriceTooLow
+    );
     require!(
         ctx.accounts.seller_counter.active_offers < MAX_OFFERS_PER_WALLET,
         MarketError::TooManyOffers,
@@ -242,7 +264,10 @@ pub fn cancel_planet_listing(ctx: Context<CancelPlanetListing>) -> Result<()> {
     );
     ctx.accounts.seller_counter.active_offers =
         ctx.accounts.seller_counter.active_offers.saturating_sub(1);
-    msg!("Planet listing cancelled: listing_id={}", ctx.accounts.listing.listing_id);
+    msg!(
+        "Planet listing cancelled: listing_id={}",
+        ctx.accounts.listing.listing_id
+    );
     Ok(())
 }
 
@@ -253,7 +278,11 @@ pub fn buy_planet_listing(ctx: Context<BuyPlanetListing>) -> Result<()> {
         ctx.accounts.listing.seller,
         MarketError::Unauthorized
     );
-    require_keys_neq!(ctx.accounts.buyer.key(), ctx.accounts.listing.seller, MarketError::Unauthorized);
+    require_keys_neq!(
+        ctx.accounts.buyer.key(),
+        ctx.accounts.listing.seller,
+        MarketError::Unauthorized
+    );
     validate_planet_authority(
         &ctx.accounts.planet.to_account_info(),
         ctx.accounts.listing.seller,
@@ -328,11 +357,12 @@ pub fn buy_planet_listing(ctx: Context<BuyPlanetListing>) -> Result<()> {
         program_id: ctx.accounts.game_program.key(),
         accounts: vec![
             AccountMeta::new_readonly(ctx.accounts.seller.key(), false),
-            AccountMeta::new_readonly(ctx.accounts.buyer.key(), false),
-            AccountMeta::new_readonly(ctx.accounts.buyer_profile.key(), false),
+            AccountMeta::new(ctx.accounts.buyer.key(), true),
+            AccountMeta::new(ctx.accounts.buyer_profile.key(), false),
             AccountMeta::new(ctx.accounts.planet.key(), false),
             AccountMeta::new(ctx.accounts.planet_coords.key(), false),
             AccountMeta::new_readonly(ctx.accounts.market_escrow_authority.key(), true),
+            AccountMeta::new_readonly(ctx.accounts.system_program.key(), false),
         ],
         data: TRANSFER_PLANET_FROM_MARKET_DISCRIMINATOR.to_vec(),
     };
@@ -346,6 +376,7 @@ pub fn buy_planet_listing(ctx: Context<BuyPlanetListing>) -> Result<()> {
             ctx.accounts.planet.to_account_info(),
             ctx.accounts.planet_coords.to_account_info(),
             ctx.accounts.market_escrow_authority.to_account_info(),
+            ctx.accounts.system_program.to_account_info(),
             ctx.accounts.game_program.to_account_info(),
         ],
         authority_seeds,
@@ -354,8 +385,11 @@ pub fn buy_planet_listing(ctx: Context<BuyPlanetListing>) -> Result<()> {
     ctx.accounts.listing.filled = true;
     ctx.accounts.seller_counter.active_offers =
         ctx.accounts.seller_counter.active_offers.saturating_sub(1);
-    ctx.accounts.market_config.total_volume =
-        ctx.accounts.market_config.total_volume.saturating_add(price as u128);
+    ctx.accounts.market_config.total_volume = ctx
+        .accounts
+        .market_config
+        .total_volume
+        .saturating_add(price as u128);
 
     msg!(
         "Planet sold: listing_id={} buyer={} seller={} planet={} price={}",

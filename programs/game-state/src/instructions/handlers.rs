@@ -3350,7 +3350,7 @@ fn lock_quest_reward_target(
     planet_key: Pubkey,
 ) -> Result<()> {
     let Some(info) = targets_info else {
-        return Ok(());
+        return err!(GameStateError::InvalidArgs);
     };
     let mut targets = validate_quest_reward_targets_pda(info, authority, program_id)?;
     sync_quest_reward_target_periods(&mut targets, now);
@@ -4318,7 +4318,7 @@ fn alliance_building_cost(building_id: u8, next_level: u8) -> Result<(u64, u64, 
     }
 }
 
-const DAILY_ROTATING_QUESTS: [QuestCatalogEntry; 24] = [
+const DAILY_ROTATING_QUESTS: [QuestCatalogEntry; 25] = [
     QuestCatalogEntry {
         req: QuestRequirement::MetalMine(3),
         metal: 1_000,
@@ -4444,6 +4444,12 @@ const DAILY_ROTATING_QUESTS: [QuestCatalogEntry; 24] = [
         metal: 600,
         crystal: 500,
         deuterium: 250,
+    },
+    QuestCatalogEntry {
+        req: QuestRequirement::ColonyShip(1),
+        metal: 1_400,
+        crystal: 1_200,
+        deuterium: 400,
     },
     QuestCatalogEntry {
         req: QuestRequirement::HeavyFighter(1),
@@ -5197,7 +5203,7 @@ fn validate_or_lock_quest_reward_target(
     epoch: i64,
 ) -> Result<()> {
     let Some(info) = targets_info else {
-        return Ok(());
+        return err!(GameStateError::InvalidArgs);
     };
     let quest = rotating_quest(period, quest_id, epoch)?;
     let metric = recurring_requirement_metric(quest.req);
@@ -5987,6 +5993,12 @@ pub fn transfer_planet(ctx: Context<TransferPlanet>) -> Result<()> {
     planet.authority = new_authority;
     planet.player = ctx.accounts.new_player_profile.key();
     coords.authority = new_authority;
+    ctx.accounts.new_player_profile.planet_count = ctx
+        .accounts
+        .new_player_profile
+        .planet_count
+        .checked_add(1)
+        .ok_or(GameStateError::PlanetCountOverflow)?;
 
     Ok(())
 }
@@ -6007,10 +6019,20 @@ pub fn transfer_planet_from_market(ctx: Context<TransferPlanetFromMarket>) -> Re
 
     require_keys_eq!(planet.authority, seller, GameStateError::Unauthorized);
     require_keys_eq!(coords.authority, seller, GameStateError::Unauthorized);
+    if ctx.accounts.new_player_profile.authority == Pubkey::default() {
+        ctx.accounts.new_player_profile.authority = new_authority;
+        ctx.accounts.new_player_profile.bump = ctx.bumps.new_player_profile;
+    }
 
     planet.authority = new_authority;
     planet.player = ctx.accounts.new_player_profile.key();
     coords.authority = new_authority;
+    ctx.accounts.new_player_profile.planet_count = ctx
+        .accounts
+        .new_player_profile
+        .planet_count
+        .checked_add(1)
+        .ok_or(GameStateError::PlanetCountOverflow)?;
 
     Ok(())
 }
@@ -6205,6 +6227,27 @@ mod tests {
                 let claim_id = if period == 1 { quest_id + 1 } else { quest_id };
                 rotating_quest(period, claim_id, 0)
                     .unwrap_or_else(|_| panic!("missing period {period} quest slot {claim_id}"));
+            }
+        }
+    }
+
+    #[test]
+    fn rotating_quests_do_not_repeat_requirements_in_same_period() {
+        for epoch in 0i64..370 {
+            for period in [1u8, 2, 3] {
+                let mut signatures = [0u64; 12];
+                for quest_id in 0u8..12 {
+                    let claim_id = if period == 1 { quest_id + 1 } else { quest_id };
+                    let quest = rotating_quest(period, claim_id, epoch).unwrap_or_else(|_| {
+                        panic!("missing period {period} epoch {epoch} quest slot {claim_id}")
+                    });
+                    let signature = recurring_requirement_signature(period, quest.req);
+                    assert!(
+                        !signatures[..quest_id as usize].contains(&signature),
+                        "duplicate period {period} epoch {epoch} quest slot {claim_id}"
+                    );
+                    signatures[quest_id as usize] = signature;
+                }
             }
         }
     }

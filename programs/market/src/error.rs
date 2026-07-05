@@ -26,4 +26,6 @@ pub enum MarketError {
     InsufficientResources,
     #[msg("The initial homeworld planet cannot be sold.")]
     HomeworldNotSellable,
+    #[msg("Planet cannot be sold while missions are active.")]
+    PlanetHasActiveMissions,
 }

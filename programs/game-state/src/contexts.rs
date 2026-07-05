@@ -1022,8 +1022,9 @@ pub struct TransferPlanet<'info> {
     pub new_authority: UncheckedAccount<'info>,
 
     #[account(
+        mut,
         seeds = [b"player_profile", new_authority.key().as_ref()],
-        bump = new_player_profile.bump,
+        bump,
         constraint = new_player_profile.authority == new_authority.key() @ GameStateError::Unauthorized
     )]
     pub new_player_profile: Account<'info, PlayerProfile>,
@@ -1049,13 +1050,16 @@ pub struct TransferPlanetFromMarket<'info> {
     /// CHECK: seller wallet is stored in planet_state.authority and only used as a seed/input.
     pub seller: UncheckedAccount<'info>,
 
-    /// CHECK: destination wallet is only used as a pubkey and PDA seed input.
-    pub new_authority: UncheckedAccount<'info>,
+    #[account(mut)]
+    pub new_authority: Signer<'info>,
 
     #[account(
+        init_if_needed,
+        payer = new_authority,
+        space = PLAYER_PROFILE_SPACE,
         seeds = [b"player_profile", new_authority.key().as_ref()],
-        bump = new_player_profile.bump,
-        constraint = new_player_profile.authority == new_authority.key() @ GameStateError::Unauthorized
+        bump,
+        constraint = new_player_profile.authority == new_authority.key() || new_player_profile.authority == Pubkey::default() @ GameStateError::Unauthorized
     )]
     pub new_player_profile: Account<'info, PlayerProfile>,
 
@@ -1069,4 +1073,6 @@ pub struct TransferPlanetFromMarket<'info> {
     pub planet_coords: Account<'info, PlanetCoordinates>,
 
     pub market_authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
 }
