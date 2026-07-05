@@ -7,7 +7,7 @@ skip-lint = false
 
 [provider]
 cluster = "devnet"
-wallet = "~/.config/solana/devnet.json"
+wallet = "~/.config/solana/id.json"
 
 [programs.devnet]
 game_state = "FJGxh6SKgNoTVzHj98oBsC2oaEy8ovadVJf8rDUNaEHb"
