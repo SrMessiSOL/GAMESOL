@@ -98,6 +98,32 @@ pub struct UpdateGameConfig<'info> {
 }
 
 #[derive(Accounts)]
+pub struct ClaimAntimatterFaucet<'info> {
+    #[account(mut)]
+    pub faucet_authority: Signer<'info>,
+    /// CHECK: recipient wallet used as the faucet cooldown seed and token authority.
+    pub recipient: UncheckedAccount<'info>,
+    #[account(
+        init_if_needed,
+        payer = faucet_authority,
+        space = FAUCET_CLAIM_SPACE,
+        seeds = [b"antimatter_faucet", recipient.key().as_ref()],
+        bump
+    )]
+    pub faucet_claim: Account<'info, FaucetClaim>,
+    #[account(mut, address = PROTOCOL_ANTIMATTER_MINT @ GameStateError::InvalidAntimatterMint)]
+    pub antimatter_mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        token::mint = antimatter_mint,
+        token::authority = recipient
+    )]
+    pub recipient_antimatter_account: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct ReleaseResourcesFromMarket<'info> {
     #[account(mut)]
     pub seller_planet: Account<'info, PlanetState>,

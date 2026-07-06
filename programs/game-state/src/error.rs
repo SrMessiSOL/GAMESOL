@@ -86,4 +86,5 @@ pub enum GameStateError {
     AllianceTreasuryNotEnoughResources,
     LegacyPlanetStateDisabled,
     WrongQuestRewardPlanet,
+    FaucetCooldownActive,
 }

@@ -49,6 +49,14 @@ pub struct GameConfig {
 
 #[account]
 #[derive(InitSpace)]
+pub struct FaucetClaim {
+    pub authority: Pubkey,
+    pub last_claim_ts: i64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
 pub struct StoreConfig {
     pub admin: Pubkey,
     pub usdc_mint: Pubkey,

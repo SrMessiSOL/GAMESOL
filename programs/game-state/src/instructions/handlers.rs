@@ -1,7 +1,8 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program_error::ProgramError;
+use anchor_lang::solana_program::program_option::COption;
 use anchor_spl::associated_token::get_associated_token_address;
-use anchor_spl::token::{self, Mint, TokenAccount, Transfer};
+use anchor_spl::token::{self, Mint, MintTo, TokenAccount, Transfer};
 
 use crate::constants::*;
 use crate::contexts::*;
@@ -6071,6 +6072,53 @@ pub fn update_antimatter_mint(
         GameStateError::InvalidAntimatterMint
     );
     ctx.accounts.game_config.antimatter_mint = antimatter_mint;
+    Ok(())
+}
+
+/// Devnet faucet: mint 10,000 ANTIMATTER to a wallet once every 24 hours.
+pub fn claim_antimatter_faucet(ctx: Context<ClaimAntimatterFaucet>) -> Result<()> {
+    require!(
+        ctx.accounts.antimatter_mint.decimals == ANTIMATTER_DECIMALS,
+        GameStateError::InvalidAntimatterMintDecimals
+    );
+    match ctx.accounts.antimatter_mint.mint_authority {
+        COption::Some(authority) => require_keys_eq!(
+            authority,
+            ctx.accounts.faucet_authority.key(),
+            GameStateError::Unauthorized
+        ),
+        COption::None => return err!(GameStateError::Unauthorized),
+    }
+
+    let now = chain_now()?;
+    if ctx.accounts.faucet_claim.authority == Pubkey::default() {
+        ctx.accounts.faucet_claim.authority = ctx.accounts.recipient.key();
+        ctx.accounts.faucet_claim.bump = ctx.bumps.faucet_claim;
+    } else {
+        require_keys_eq!(
+            ctx.accounts.faucet_claim.authority,
+            ctx.accounts.recipient.key(),
+            GameStateError::Unauthorized
+        );
+        require!(
+            now.saturating_sub(ctx.accounts.faucet_claim.last_claim_ts)
+                >= ANTIMATTER_FAUCET_COOLDOWN_SECONDS,
+            GameStateError::FaucetCooldownActive
+        );
+    }
+
+    token::mint_to(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            MintTo {
+                mint: ctx.accounts.antimatter_mint.to_account_info(),
+                to: ctx.accounts.recipient_antimatter_account.to_account_info(),
+                authority: ctx.accounts.faucet_authority.to_account_info(),
+            },
+        ),
+        ANTIMATTER_FAUCET_AMOUNT,
+    )?;
+    ctx.accounts.faucet_claim.last_claim_ts = now;
     Ok(())
 }
 

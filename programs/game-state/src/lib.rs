@@ -473,6 +473,10 @@ pub mod game_state {
         instructions::update_antimatter_mint(ctx, antimatter_mint)
     }
 
+    pub fn claim_antimatter_faucet(ctx: Context<ClaimAntimatterFaucet>) -> Result<()> {
+        instructions::claim_antimatter_faucet(ctx)
+    }
+
     pub fn accelerate_build_with_antimatter(ctx: Context<UseAntimatter>) -> Result<()> {
         instructions::accelerate_build_with_antimatter(ctx)
     }

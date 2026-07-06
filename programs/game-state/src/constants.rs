@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 
 use crate::state::{
     AllianceJoinRequest, AllianceMembership, AllianceMetadata, AllianceState,
-    AllianceTreasuryState, AuthorizedVault, GameConfig, PlanetCoordinates, PlanetState,
+    AllianceTreasuryState, AuthorizedVault, FaucetClaim, GameConfig, PlanetCoordinates, PlanetState,
     PlayerProfile, PublicPlanetCoordinates, PublicPlanetState, QuestProgressState,
     QuestRewardTargetState, QuestState, StoreConfig, StorePurchaseState, VaultBackup,
 };
@@ -31,6 +31,8 @@ pub const MISSION_COLONIZE: u8 = 5;
 pub const MISSION_ESPIONAGE: u8 = 6;
 pub const ANTIMATTER_DECIMALS: u8 = 6;
 pub const ANTIMATTER_SCALE: u64 = 1_000_000;
+pub const ANTIMATTER_FAUCET_AMOUNT: u64 = 10_000 * ANTIMATTER_SCALE;
+pub const ANTIMATTER_FAUCET_COOLDOWN_SECONDS: i64 = 24 * 60 * 60;
 pub const ALLIANCE_CREATE_USDC_COST: u64 = 500_000_000;
 pub const ALLIANCE_CREATE_ANTIMATTER_COST: u64 = 100_000 * ANTIMATTER_SCALE;
 pub const ALLIANCE_CREATE_ANTIMATTER_BURN: u64 = ALLIANCE_CREATE_ANTIMATTER_COST / 2;
@@ -63,6 +65,7 @@ pub const PUBLIC_PLANET_STATE_SPACE: usize = 8 + PublicPlanetState::INIT_SPACE;
 pub const AUTHORIZED_VAULT_SPACE: usize = 8 + AuthorizedVault::INIT_SPACE;
 pub const VAULT_BACKUP_SPACE: usize = 8 + VaultBackup::INIT_SPACE;
 pub const GAME_CONFIG_SPACE: usize = 8 + GameConfig::INIT_SPACE;
+pub const FAUCET_CLAIM_SPACE: usize = 8 + FaucetClaim::INIT_SPACE;
 pub const STORE_CONFIG_SPACE: usize = 8 + StoreConfig::INIT_SPACE;
 pub const STORE_PURCHASE_STATE_SPACE: usize = 8 + StorePurchaseState::INIT_SPACE;
 pub const QUEST_STATE_SPACE: usize = 8 + QuestState::INIT_SPACE;
