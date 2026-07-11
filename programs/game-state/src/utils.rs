@@ -2348,8 +2348,10 @@ fn collect_debris(coords: &mut PlanetCoordinates, cargo_room: u64, recyclers: u3
         return (0, 0);
     }
 
-    let metal = coords.debris_metal.min(cargo_room);
-    let after_metal = cargo_room.saturating_sub(metal);
+    let recycler_room = (recyclers as u64).saturating_mul(20_000);
+    let collection_room = cargo_room.min(recycler_room);
+    let metal = coords.debris_metal.min(collection_room);
+    let after_metal = collection_room.saturating_sub(metal);
     let crystal = coords.debris_crystal.min(after_metal);
 
     coords.debris_metal = coords.debris_metal.saturating_sub(metal);
@@ -4027,6 +4029,25 @@ mod tests {
         assert_eq!(source.missions[0].recycler, 1);
         assert!(source.missions[0].cargo_metal + source.missions[0].cargo_crystal > 0);
         assert_eq!(coords.debris_metal + coords.debris_crystal, 0);
+    }
+
+    #[test]
+    fn debris_collection_is_bounded_by_surviving_recycler_capacity() {
+        let mut coords = PlanetCoordinates {
+            galaxy: 1,
+            system: 1,
+            position: 1,
+            planet: Pubkey::new_unique(),
+            authority: Pubkey::new_unique(),
+            debris_metal: 50_000,
+            debris_crystal: 50_000,
+            bump: 0,
+        };
+
+        let (metal, crystal) = collect_debris(&mut coords, 100_000, 1);
+
+        assert_eq!(metal + crystal, 20_000);
+        assert_eq!(coords.debris_metal + coords.debris_crystal, 80_000);
     }
 
     #[test]
