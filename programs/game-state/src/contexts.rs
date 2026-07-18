@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_spl::associated_token::get_associated_token_address;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use crate::constants::*;
@@ -124,6 +125,15 @@ pub struct UpdateGameConfig<'info> {
         has_one = admin @ GameStateError::Unauthorized
     )]
     pub game_config: Account<'info, GameConfig>,
+}
+
+#[derive(Accounts)]
+pub struct RotateGameConfigAdmin<'info> {
+    pub admin: Signer<'info>,
+    #[account(mut, seeds = [b"game_config"], bump = game_config.bump, has_one = admin @ GameStateError::Unauthorized)]
+    pub game_config: Account<'info, GameConfig>,
+    /// CHECK: The current admin explicitly chooses the next admin key.
+    pub new_admin: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -492,6 +502,16 @@ pub struct UpdateStoreConfig<'info> {
         has_one = admin @ GameStateError::Unauthorized
     )]
     pub store_config: Account<'info, StoreConfig>,
+}
+
+#[derive(Accounts)]
+pub struct RotateStoreConfigAdmin<'info> {
+    pub admin: Signer<'info>,
+    #[account(mut, seeds = [b"store_config"], bump = store_config.bump, has_one = admin @ GameStateError::Unauthorized)]
+    pub store_config: Account<'info, StoreConfig>,
+    pub old_antimatter_treasury: Account<'info, TokenAccount>,
+    /// CHECK: The current admin explicitly chooses the next admin key.
+    pub new_admin: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]

@@ -34,6 +34,13 @@ pub mod market {
         instructions::update_market_config(ctx, antimatter_mint)
     }
 
+    pub fn rotate_market_config_admin(
+        ctx: Context<RotateMarketConfigAdmin>,
+        new_admin: Pubkey,
+    ) -> Result<()> {
+        instructions::rotate_market_config_admin(ctx, new_admin)
+    }
+
     pub fn create_offer(
         ctx: Context<CreateOffer>,
         resource_type: ResourceType,

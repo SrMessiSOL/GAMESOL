@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_spl::associated_token::get_associated_token_address;
 use anchor_spl::token::{Mint, Token, TokenAccount};
 
 use crate::constants::{MARKET_CONFIG_SPACE, PROTOCOL_ANTIMATTER_MINT, PROTOCOL_AUTHORITY};
@@ -37,6 +38,16 @@ pub struct UpdateMarketConfig<'info> {
     pub admin: Signer<'info>,
     #[account(mut, seeds = [b"market_config"], bump = market_config.bump, has_one = admin @ MarketError::Unauthorized)]
     pub market_config: Account<'info, MarketConfig>,
+}
+
+#[derive(Accounts)]
+pub struct RotateMarketConfigAdmin<'info> {
+    pub admin: Signer<'info>,
+    #[account(mut, seeds = [b"market_config"], bump = market_config.bump, has_one = admin @ MarketError::Unauthorized)]
+    pub market_config: Account<'info, MarketConfig>,
+    pub old_antimatter_treasury: Account<'info, TokenAccount>,
+    /// CHECK: The current admin explicitly chooses the next admin key.
+    pub new_admin: UncheckedAccount<'info>,
 }
 
 pub fn initialize_market(
@@ -78,5 +89,22 @@ pub fn update_market_config(
         MarketError::InvalidMint
     );
     ctx.accounts.market_config.antimatter_mint = antimatter_mint;
+    Ok(())
+}
+
+pub fn rotate_market_config_admin(
+    ctx: Context<RotateMarketConfigAdmin>,
+    new_admin: Pubkey,
+) -> Result<()> {
+    require_keys_eq!(new_admin, ctx.accounts.new_admin.key(), MarketError::Unauthorized);
+    require!(new_admin != Pubkey::default(), MarketError::Unauthorized);
+    require!(new_admin != ctx.accounts.admin.key(), MarketError::Unauthorized);
+    require_keys_eq!(
+        ctx.accounts.old_antimatter_treasury.key(),
+        get_associated_token_address(&ctx.accounts.admin.key(), &PROTOCOL_ANTIMATTER_MINT),
+        MarketError::Unauthorized
+    );
+    require!(ctx.accounts.old_antimatter_treasury.amount == 0, MarketError::Unauthorized);
+    ctx.accounts.market_config.admin = new_admin;
     Ok(())
 }

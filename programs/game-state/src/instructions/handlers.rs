@@ -4341,6 +4341,28 @@ pub fn update_store_config(ctx: Context<UpdateStoreConfig>, enabled: bool) -> Re
     Ok(())
 }
 
+pub fn rotate_store_config_admin(
+    ctx: Context<RotateStoreConfigAdmin>,
+    new_admin: Pubkey,
+) -> Result<()> {
+    require_keys_eq!(new_admin, ctx.accounts.new_admin.key(), GameStateError::InvalidArgs);
+    require!(new_admin != Pubkey::default(), GameStateError::InvalidArgs);
+    require!(new_admin != ctx.accounts.admin.key(), GameStateError::InvalidArgs);
+    require_keys_eq!(
+        ctx.accounts.old_antimatter_treasury.key(),
+        get_associated_token_address(&ctx.accounts.admin.key(), &PROTOCOL_ANTIMATTER_MINT),
+        GameStateError::InvalidAntimatterAccount
+    );
+    require!(ctx.accounts.old_antimatter_treasury.amount == 0, GameStateError::InvalidArgs);
+    require_keys_eq!(
+        ctx.accounts.old_antimatter_treasury.mint,
+        PROTOCOL_ANTIMATTER_MINT,
+        GameStateError::InvalidAntimatterMint
+    );
+    ctx.accounts.store_config.admin = new_admin;
+    Ok(())
+}
+
 fn sync_store_periods(store: &mut Account<StorePurchaseState>, now: i64) {
     let daily_epoch = daily_epoch(now);
     let weekly_epoch = weekly_epoch(now);
@@ -6774,6 +6796,17 @@ pub fn update_antimatter_mint(
         GameStateError::InvalidAntimatterMint
     );
     ctx.accounts.game_config.antimatter_mint = antimatter_mint;
+    Ok(())
+}
+
+pub fn rotate_game_config_admin(
+    ctx: Context<RotateGameConfigAdmin>,
+    new_admin: Pubkey,
+) -> Result<()> {
+    require_keys_eq!(new_admin, ctx.accounts.new_admin.key(), GameStateError::InvalidArgs);
+    require!(new_admin != Pubkey::default(), GameStateError::InvalidArgs);
+    require!(new_admin != ctx.accounts.admin.key(), GameStateError::InvalidArgs);
+    ctx.accounts.game_config.admin = new_admin;
     Ok(())
 }
 

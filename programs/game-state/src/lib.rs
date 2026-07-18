@@ -156,6 +156,13 @@ pub mod game_state {
         instructions::update_store_config(ctx, enabled)
     }
 
+    pub fn rotate_store_config_admin(
+        ctx: Context<RotateStoreConfigAdmin>,
+        new_admin: Pubkey,
+    ) -> Result<()> {
+        instructions::rotate_store_config_admin(ctx, new_admin)
+    }
+
     pub fn purchase_store_pack(
         ctx: Context<PurchaseStorePack>,
         period: u8,
@@ -504,6 +511,13 @@ pub mod game_state {
         antimatter_mint: Pubkey,
     ) -> Result<()> {
         instructions::update_antimatter_mint(ctx, antimatter_mint)
+    }
+
+    pub fn rotate_game_config_admin(
+        ctx: Context<RotateGameConfigAdmin>,
+        new_admin: Pubkey,
+    ) -> Result<()> {
+        instructions::rotate_game_config_admin(ctx, new_admin)
     }
 
     pub fn claim_antimatter_faucet(ctx: Context<ClaimAntimatterFaucet>) -> Result<()> {
