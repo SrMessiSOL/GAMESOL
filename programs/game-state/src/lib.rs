@@ -5,17 +5,43 @@ pub mod error;
 pub mod instructions;
 pub mod state;
 pub mod utils;
+pub mod ufo;
 
 pub use constants::*;
 use contexts::*;
 pub use error::*;
 pub use state::*;
+pub use ufo::*;
 
 declare_id!("FJGxh6SKgNoTVzHj98oBsC2oaEy8ovadVJf8rDUNaEHb");
 
 #[program]
 pub mod game_state {
     use super::*;
+
+    pub fn configure_ufo(ctx: Context<ConfigureUfo>, attestor: Pubkey, enabled: bool) -> Result<()> {
+        ufo::configure(ctx, attestor, enabled)
+    }
+
+    pub fn start_ufo_expedition(ctx: Context<StartUfo>, proof: UfoProof) -> Result<()> {
+        ufo::start(ctx, proof)
+    }
+
+    pub fn advance_ufo_expedition(ctx: Context<UfoAction>, proof: UfoProof, choice: u8, use_booster: bool) -> Result<()> {
+        ufo::advance(ctx, proof, choice, use_booster)
+    }
+
+    pub fn claim_ufo_loot(ctx: Context<UfoAction>, proof: UfoProof) -> Result<()> {
+        ufo::claim(ctx, proof)
+    }
+
+    pub fn equip_ufo_loot(ctx: Context<ManageUfo>, item: u8) -> Result<()> {
+        ufo::equip(ctx, item)
+    }
+
+    pub fn abort_ufo_expedition(ctx: Context<ManageUfo>) -> Result<()> {
+        ufo::abort(ctx)
+    }
 
     pub fn initialize_player(
         ctx: Context<InitializePlayer>,
