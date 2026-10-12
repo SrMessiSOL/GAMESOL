@@ -27,4 +27,6 @@ Do not reuse this domain or issuer for a mainnet deployment. Mainnet activation 
 
 Source implementation is not a deployed upgrade. Require host tests, SBF build and stack checks, local-validator or devnet rehearsals for direct and Lazor CPI calls, regenerated IDL, verified upgrade authority, and explicit configuration of the issuer before enabling.
 
+The cloud SBF gate detected oversized frames in Anchor 0.30 account initialization and BLAKE3 1.8.4's digest 0.11 dependency. The workspace moves to Anchor 0.31.1's init-closure stack fix, with BLAKE3 pinned to 1.8.3. Default eight-byte discriminators and existing account layouts are unchanged. Both game and market host suites must pass; the market program is not deployed by this feature.
+
 The frontend issuer requires server-only `GAMESOL_UFO_ATTESTOR_KEY` (base64 64-byte Ed25519 keypair), existing `GAMESOL_NFT_LINK_SECRET`, mainnet DAS RPC and a devnet game RPC. A server key authorizes only bounded cosmetic/PvE eligibility; progress and rewards remain on-chain. Do not paste keys in chat or commit them.
