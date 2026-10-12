@@ -290,7 +290,7 @@ pub struct SyncPlanetOwnerIndexVault<'info> {
     #[account(
         has_one = authority @ GameStateError::Unauthorized
     )]
-    pub planet_state: Account<'info, PlanetState>,
+    pub planet_state: Box<Account<'info, PlanetState>>,
     #[account(
         init_if_needed,
         payer = vault_signer,
