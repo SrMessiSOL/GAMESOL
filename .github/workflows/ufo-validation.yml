@@ -3,7 +3,7 @@ name: UFO on-chain validation
 on:
   push:
     branches: [fix/friendly-space-travel]
-    paths: [programs/game-state/src/ufo.rs, programs/game-state/src/lib.rs, .github/workflows/ufo-validation.yml]
+    paths: [programs/game-state/src/ufo.rs, programs/game-state/src/lib.rs, scripts/ufo-validator-test.cjs, .github/workflows/ufo-validation.yml]
   workflow_dispatch:
 
 permissions:
@@ -40,6 +40,13 @@ jobs:
           set -o pipefail
           cargo-build-sbf --manifest-path programs/game-state/Cargo.toml --sbf-out-dir target/deploy -- --locked --jobs 1 2>&1 | tee /tmp/ufo-sbf.log
           if grep -Ei 'stack offset.*exceeded|stack frame.*exceeded' /tmp/ufo-sbf.log; then exit 1; fi
+      - name: Rehearse actual program in an isolated local validator
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ufo-js" --no-audit --no-fund @solana/web3.js@1.98.4
+          solana-test-validator --reset --ledger "$RUNNER_TEMP/ufo-ledger" --bpf-program FJGxh6SKgNoTVzHj98oBsC2oaEy8ovadVJf8rDUNaEHb target/deploy/game_state.so > "$RUNNER_TEMP/ufo-validator.log" 2>&1 &
+          validator_pid=$!
+          trap 'kill "$validator_pid" || true' EXIT
+          NODE_PATH="$RUNNER_TEMP/ufo-js/node_modules" node scripts/ufo-validator-test.cjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ufo-game-state-sbf
