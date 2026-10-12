@@ -1,11 +1,18 @@
 // Local-validator only: generated test identities, no mainnet NFT or user wallet.
 const assert=require('node:assert/strict');
 const crypto=require('node:crypto');
+const fs=require('node:fs');
+const path=require('node:path');
 const {Connection,Keypair,PublicKey,SystemProgram,Ed25519Program,Transaction,TransactionInstruction,SYSVAR_INSTRUCTIONS_PUBKEY,sendAndConfirmTransaction}=require('@solana/web3.js');
 const PROGRAM=new PublicKey('FJGxh6SKgNoTVzHj98oBsC2oaEy8ovadVJf8rDUNaEHb');
 const COLLECTION=new PublicKey('53UVubjHQpC4RmUnDGU1PV3f2bYFk6GcWb3SgtYFMHTb');
 const rpc=new Connection('http://127.0.0.1:8899','confirmed');
-const admin=Keypair.generate(), commander=Keypair.generate(), other=Keypair.generate(), issuer=Keypair.generate();
+const directory=process.env.UFO_TEST_FIXTURE_DIR;
+if(!directory)throw new Error('An explicit cloud test fixture directory is required.');
+const preparing=process.argv.includes('--prepare');
+const saved=preparing?null:JSON.parse(fs.readFileSync(path.join(directory,'identities.json'),'utf8'));
+const signer=name=>saved?Keypair.fromSecretKey(Uint8Array.from(saved[name])):Keypair.generate();
+const admin=signer('admin'), commander=signer('commander'), other=signer('other'), issuer=signer('issuer');
 const asset=Keypair.generate().publicKey, holder=Keypair.generate().publicKey;
 const disc=name=>crypto.createHash('sha256').update(`global:${name}`).digest().subarray(0,8);
 const pda=(seed,key)=>PublicKey.findProgramAddressSync([Buffer.from(seed),...(key?[key.toBuffer()]:[])],PROGRAM)[0];
@@ -13,6 +20,15 @@ const key=(pubkey,isWritable=false,isSigner=false)=>({pubkey,isWritable,isSigner
 const i64=value=>{const bytes=Buffer.alloc(8);bytes.writeBigInt64LE(BigInt(value));return bytes;};
 const u64=value=>{const bytes=Buffer.alloc(8);bytes.writeBigUInt64LE(BigInt(value));return bytes;};
 const instruction=(name,keys,args=Buffer.alloc(0))=>new TransactionInstruction({programId:PROGRAM,keys,data:Buffer.concat([disc(name),args])});
+if(preparing) {
+  fs.mkdirSync(directory,{recursive:true});
+  fs.writeFileSync(path.join(directory,'identities.json'),JSON.stringify({admin:[...admin.secretKey],commander:[...commander.secretKey],other:[...other.secretKey],issuer:[...issuer.secretKey]}),{mode:0o600});
+  const [config,bump]=PublicKey.findProgramAddressSync([Buffer.from('game_config')],PROGRAM);
+  const data=Buffer.concat([crypto.createHash('sha256').update('account:GameConfig').digest().subarray(0,8),admin.publicKey.toBuffer(),Keypair.generate().publicKey.toBuffer(),Buffer.from([bump])]);
+  fs.writeFileSync(path.join(directory,'game-config.json'),JSON.stringify({pubkey:config.toBase58(),account:{lamports:10000000,data:[data.toString('base64'),'base64'],owner:PROGRAM.toBase58(),executable:false,rentEpoch:0}}));
+  console.log(config.toBase58());
+  process.exit(0);
+}
 const send=(signer,instructions)=>sendAndConfirmTransaction(rpc,new Transaction().add(...instructions),[signer],{commitment:'confirmed'});
 async function rejected(operation,label) { await assert.rejects(operation); console.log(`PASS: ${label}`); }
 async function profile(signer) {
@@ -58,7 +74,7 @@ async function main() {
   for(let attempt=0;attempt<60;attempt++) { try { await rpc.getVersion();break; }catch(error){if(attempt===59)throw error;await new Promise(resolve=>setTimeout(resolve,1000));} }
   for(const signer of [admin,commander,other]) { const signature=await rpc.requestAirdrop(signer.publicKey,3_000_000_000);await rpc.confirmTransaction(signature); }
   await profile(commander);await profile(other);
-  await send(admin,[instruction('initialize_game_config',[key(admin.publicKey,true,true),key(pda('game_config'),true),key(SystemProgram.programId)],Keypair.generate().publicKey.toBuffer())]);
+  // Genesis fixture supplies this test-only admin; production bootstrap stays restricted.
   const configure=signer=>instruction('configure_ufo',[key(signer.publicKey,true,true),key(pda('game_config')),key(pda('ufo_config'),true),key(SystemProgram.programId)],Buffer.concat([issuer.publicKey.toBuffer(),Buffer.from([1])]));
   await rejected(()=>send(other,[configure(other)]),'only game admin can configure attestor');
   await send(admin,[configure(admin)]);
