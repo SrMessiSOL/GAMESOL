@@ -2288,7 +2288,7 @@ fn require_planet_state_data(data: &[u8]) -> Result<()> {
     let discriminator = <PlanetState as anchor_lang::Discriminator>::DISCRIMINATOR;
     require!(
         data.len() >= PLANET_DEFENSE_BUILD_FINISH_TS_OFFSET + 8
-            && data[..8] == discriminator,
+            && &data[..8] == discriminator,
         GameStateError::InvalidArgs
     );
     Ok(())
