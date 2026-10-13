@@ -25,7 +25,9 @@ Do not reuse this domain or issuer for a mainnet deployment. Mainnet activation 
 
 ## Release Gates
 
-Source implementation is not a deployed upgrade. Require host tests, SBF build and stack checks, local-validator or devnet rehearsals for direct and Lazor CPI calls, regenerated IDL, verified upgrade authority, and explicit configuration of the issuer before enabling.
+Backend commit `85c2440` passed host tests, the cloud SBF/stack gate and the isolated-validator expedition/booster/claim/equip rehearsal. Its exact CI binary is now deployed to the existing devnet game ID. The user signed Squads v3 upgrade and activation proposals; all six transactions finalized successfully. The configured issuer is enabled on devnet. The game ID, planet layouts and upgrade authority are unchanged.
+
+The real holding-wallet and Lazor CPI expedition loop is a separate release check; do not treat the isolated-validator rehearsal or configuration activation as proof of completed real-player gameplay. Mainnet remains disabled. Transaction evidence is in the frontend repository's `docs/UFO_DEVNET_ACTIVATION_PROOF.md` on branch `feat/crypto-ufos-wallet-link`.
 
 The cloud SBF gate detected oversized frames in Anchor 0.30 account initialization and BLAKE3 1.8.4's digest 0.11 dependency. The workspace moves to Anchor 0.31.1's init-closure stack fix, with BLAKE3 pinned to 1.8.3. Default eight-byte discriminators and existing account layouts are unchanged. Both game and market host suites must pass; the market program is not deployed by this feature.
 

@@ -37,7 +37,7 @@ cargo check --workspace --jobs 1
 npm.cmd run build
 ```
 
-Run the Anchor/SBF build with the repo toolchain version (`0.30.1`) and do not
+Run the Anchor/SBF build with the repo toolchain version (`0.31.1`) and do not
 ship while there are unresolved stack-frame diagnostics in game instructions.
 
 ```bash
@@ -49,7 +49,7 @@ anchor build --program-name market --ignore-keys
 
 1. Create or choose final mainnet program keypairs.
 2. Patch the two `declare_id!` values and cross-program constants.
-3. Build both programs with Anchor `0.30.1`.
+3. Build both programs with Anchor `0.31.1`.
 4. Deploy `game_state` and `market` to mainnet.
 5. Initialize `GameConfig` with the final ANTIMATTER mint.
 6. Initialize `MarketConfig` with the same ANTIMATTER mint.
