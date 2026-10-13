@@ -13,7 +13,7 @@ pub use error::*;
 pub use state::*;
 pub use ufo::*;
 
-declare_id!("FJGxh6SKgNoTVzHj98oBsC2oaEy8ovadVJf8rDUNaEHb");
+declare_id!("J6rNikvM7XLs6REtbbhMhe8NVd6Nfqa1C7PDfgHSDFkq");
 
 #[program]
 pub mod game_state {
@@ -22,25 +22,35 @@ pub mod game_state {
     pub fn configure_ufo(ctx: Context<ConfigureUfo>, attestor: Pubkey, enabled: bool) -> Result<()> {
         ufo::configure(ctx, attestor, enabled)
     }
-
     pub fn start_ufo_expedition(ctx: Context<StartUfo>, proof: UfoProof) -> Result<()> {
         ufo::start(ctx, proof)
     }
-
     pub fn advance_ufo_expedition(ctx: Context<UfoAction>, proof: UfoProof, choice: u8, use_booster: bool) -> Result<()> {
         ufo::advance(ctx, proof, choice, use_booster)
     }
-
     pub fn claim_ufo_loot(ctx: Context<UfoAction>, proof: UfoProof) -> Result<()> {
         ufo::claim(ctx, proof)
     }
-
     pub fn equip_ufo_loot(ctx: Context<ManageUfo>, item: u8) -> Result<()> {
         ufo::equip(ctx, item)
     }
-
     pub fn abort_ufo_expedition(ctx: Context<ManageUfo>) -> Result<()> {
         ufo::abort(ctx)
+    }
+
+    /// Lazor-native v2 onboarding. The signer is the permanent player vault;
+    /// GAMESOL does not create, receive, or persist any private key material.
+    pub fn initialize_lazor_player(ctx: Context<InitializeLazorPlayer>) -> Result<()> {
+        instructions::initialize_lazor_player(ctx)
+    }
+
+    /// Allows an independent fee payer to cover account rent atomically while
+    /// the permanent Lazor vault remains the player authority and owner.
+    pub fn sponsor_account_rent(
+        ctx: Context<SponsorAccountRent>,
+        lamports: u64,
+    ) -> Result<()> {
+        instructions::sponsor_account_rent(ctx, lamports)
     }
 
     pub fn initialize_player(
@@ -309,6 +319,108 @@ pub mod game_state {
         building_id: u8,
     ) -> Result<()> {
         instructions::upgrade_alliance_building(ctx, building_id)
+    }
+
+    pub fn claim_system_sovereignty(
+        ctx: Context<ClaimSystemSovereignty>,
+        galaxy: u16,
+        system: u16,
+        specialization: u8,
+        vulnerability_hour_utc: u8,
+    ) -> Result<()> {
+        instructions::claim_system_sovereignty(
+            ctx,
+            galaxy,
+            system,
+            specialization,
+            vulnerability_hour_utc,
+        )
+    }
+
+    pub fn fund_system_sovereignty(
+        ctx: Context<FundSystemSovereignty>,
+        galaxy: u16,
+        system: u16,
+    ) -> Result<()> {
+        instructions::fund_system_sovereignty(ctx, galaxy, system)
+    }
+
+    pub fn set_system_sovereignty_specialization(
+        ctx: Context<SetSystemSovereigntySpecialization>,
+        galaxy: u16,
+        system: u16,
+        specialization: u8,
+    ) -> Result<()> {
+        instructions::set_system_sovereignty_specialization(
+            ctx,
+            galaxy,
+            system,
+            specialization,
+        )
+    }
+
+    pub fn initialize_alliance_governance(
+        ctx: Context<InitializeAllianceGovernance>,
+        dao: Pubkey,
+        governance_executor: Pubkey,
+    ) -> Result<()> {
+        instructions::initialize_alliance_governance(ctx, dao, governance_executor)
+    }
+
+    pub fn initialize_gamesol_governance(
+        ctx: Context<InitializeGamesolGovernance>,
+        dao: Pubkey,
+        governance_executor: Pubkey,
+    ) -> Result<()> {
+        instructions::initialize_gamesol_governance(ctx, dao, governance_executor)
+    }
+
+    pub fn enroll_alliance_in_gamesol_governance(
+        ctx: Context<EnrollAllianceInGamesolGovernance>,
+    ) -> Result<()> {
+        instructions::enroll_alliance_in_gamesol_governance(ctx)
+    }
+
+    pub fn sync_alliance_gamesol_governance(
+        ctx: Context<SyncAllianceGamesolGovernance>,
+    ) -> Result<()> {
+        instructions::sync_alliance_gamesol_governance(ctx)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_alliance_decision(
+        ctx: Context<CreateAllianceDecision>,
+        proposal_id: u64,
+        external_proposal: Pubkey,
+        action: u8,
+        target_planet: Pubkey,
+        galaxy: u16,
+        system: u16,
+        specialization: u8,
+        vulnerability_hour_utc: u8,
+        expires_at: i64,
+    ) -> Result<()> {
+        instructions::create_alliance_decision(
+            ctx,
+            proposal_id,
+            external_proposal,
+            action,
+            target_planet,
+            galaxy,
+            system,
+            specialization,
+            vulnerability_hour_utc,
+            expires_at,
+        )
+    }
+
+    pub fn execute_alliance_decision(
+        ctx: Context<ExecuteAllianceDecision>,
+        proposal_id: u64,
+        galaxy: u16,
+        system: u16,
+    ) -> Result<()> {
+        instructions::execute_alliance_decision(ctx, proposal_id, galaxy, system)
     }
 
     pub fn produce(ctx: Context<MutatePlanetState>, now: i64) -> Result<()> {

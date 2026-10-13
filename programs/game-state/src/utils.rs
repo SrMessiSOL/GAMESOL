@@ -1023,6 +1023,25 @@ pub(crate) fn start_build_planet(
     building_idx: u8,
     now: i64,
 ) -> Result<()> {
+    start_build_planet_with_bonus(planet, building_idx, now, 0)
+}
+
+pub(crate) fn reduce_duration_by_bps(duration: i64, bonus_bps: u16) -> i64 {
+    let bounded_bonus = u64::from(bonus_bps.min(9_000));
+    let duration = duration.max(1) as u64;
+    duration
+        .saturating_mul(10_000u64.saturating_sub(bounded_bonus))
+        .checked_div(10_000)
+        .unwrap_or(1)
+        .max(1) as i64
+}
+
+pub(crate) fn start_build_planet_with_bonus(
+    planet: &mut PlanetState,
+    building_idx: u8,
+    now: i64,
+    speed_bonus_bps: u16,
+) -> Result<()> {
     settle_resources(planet, now)?;
     let current = planet.building_level(building_idx);
     let next = current.checked_add(1).ok_or(GameStateError::InvalidArgs)?;
@@ -1068,7 +1087,10 @@ pub(crate) fn start_build_planet(
     planet.crystal -= cc;
     planet.deuterium -= cd;
 
-    let dur = build_seconds(building_idx, next as u64, planet.robotics_factory as u64);
+    let dur = reduce_duration_by_bps(
+        build_seconds(building_idx, next as u64, planet.robotics_factory as u64),
+        speed_bonus_bps,
+    );
     planet.build_queue_item = building_idx;
     planet.build_queue_target = next;
     planet.build_finish_ts = now.saturating_add(dur);
@@ -1088,6 +1110,15 @@ pub(crate) fn start_research_planet(
     planet: &mut PlanetState,
     tech_idx: u8,
     now: i64,
+) -> Result<()> {
+    start_research_planet_with_bonus(planet, tech_idx, now, 0)
+}
+
+pub(crate) fn start_research_planet_with_bonus(
+    planet: &mut PlanetState,
+    tech_idx: u8,
+    now: i64,
+    speed_bonus_bps: u16,
 ) -> Result<()> {
     settle_resources(planet, now)?;
     require!(tech_idx <= 9, GameStateError::InvalidTech);
@@ -1122,8 +1153,11 @@ pub(crate) fn start_research_planet(
 
     planet.research_queue_item = tech_idx;
     planet.research_queue_target = next;
-    planet.research_finish_ts =
-        now + research_seconds(next, planet.research_lab, planet.igr_network);
+    let duration = reduce_duration_by_bps(
+        research_seconds(next, planet.research_lab, planet.igr_network),
+        speed_bonus_bps,
+    );
+    planet.research_finish_ts = now.saturating_add(duration);
     Ok(())
 }
 
@@ -1132,6 +1166,16 @@ pub(crate) fn build_defense_planet(
     defense_type: u8,
     quantity: u32,
     now: i64,
+) -> Result<()> {
+    build_defense_planet_with_bonus(planet, defense_type, quantity, now, 0)
+}
+
+pub(crate) fn build_defense_planet_with_bonus(
+    planet: &mut PlanetState,
+    defense_type: u8,
+    quantity: u32,
+    now: i64,
+    speed_bonus_bps: u16,
 ) -> Result<()> {
     require!(quantity > 0, GameStateError::InvalidArgs);
     require!(
@@ -1180,13 +1224,15 @@ pub(crate) fn build_defense_planet(
 
     planet.defense_build_item = defense_type;
     planet.defense_build_qty = quantity;
-    planet.defense_build_finish_ts = now
-        + defense_build_seconds(
+    planet.defense_build_finish_ts = now.saturating_add(reduce_duration_by_bps(
+        defense_build_seconds(
             defense_type,
             quantity,
             planet.shipyard,
             planet.nanite_factory,
-        );
+        ),
+        speed_bonus_bps,
+    ));
     Ok(())
 }
 
@@ -1329,6 +1375,16 @@ pub(crate) fn build_ship_planet(
     quantity: u32,
     now: i64,
 ) -> Result<()> {
+    build_ship_planet_with_bonus(planet, ship_type, quantity, now, 0)
+}
+
+pub(crate) fn build_ship_planet_with_bonus(
+    planet: &mut PlanetState,
+    ship_type: u8,
+    quantity: u32,
+    now: i64,
+    speed_bonus_bps: u16,
+) -> Result<()> {
     require!(quantity > 0, GameStateError::InvalidArgs);
     settle_resources(planet, now)?;
     require!(planet.shipyard >= 1, GameStateError::ShipyardTooLow);
@@ -1371,7 +1427,10 @@ pub(crate) fn build_ship_planet(
     planet.crystal -= total_c;
     planet.deuterium -= total_d;
 
-    let dur = ship_build_seconds(ship_type, quantity, planet.shipyard, planet.nanite_factory);
+    let dur = reduce_duration_by_bps(
+        ship_build_seconds(ship_type, quantity, planet.shipyard, planet.nanite_factory),
+        speed_bonus_bps,
+    );
 
     planet.ship_build_item = ship_type;
     planet.ship_build_qty = quantity;
@@ -4133,5 +4192,13 @@ mod tests {
         assert!(source.missions[0].attacker_won);
         assert!(source.missions[0].cargo_metal > 0);
         assert!(destination.metal < 10_000);
+    }
+
+    #[test]
+    fn sovereignty_speed_bonus_is_bounded_and_never_zeroes_duration() {
+        assert_eq!(reduce_duration_by_bps(1_000, 1_000), 900);
+        assert_eq!(reduce_duration_by_bps(1_000, 1_500), 850);
+        assert_eq!(reduce_duration_by_bps(1, 1_500), 1);
+        assert_eq!(reduce_duration_by_bps(1_000, u16::MAX), 100);
     }
 }

@@ -65,3 +65,17 @@ pub struct SellerCounter {
     pub active_offers: u32,
     pub bump: u8,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sponsored_market_rent_spaces_match_client_contract() {
+        assert_eq!(8 + SellerCounter::INIT_SPACE, 49);
+        assert_eq!(8 + MarketOffer::INIT_SPACE, 103);
+        assert_eq!(8 + PlanetMarketObligation::INIT_SPACE, 45);
+        assert_eq!(8 + PlanetListing::INIT_SPACE, 126);
+        assert_eq!(8 + PlanetListingIndex::INIT_SPACE, 106);
+    }
+}

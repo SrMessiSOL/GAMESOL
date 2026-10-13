@@ -44,6 +44,57 @@ fn monthly_epoch(now: i64) -> i64 {
     year * 12 + (month - 1)
 }
 
+/// Creates a v2 GAMESOL player whose canonical authority is the permanent
+/// Lazor vault PDA that signed this instruction.
+pub fn initialize_lazor_player(ctx: Context<InitializeLazorPlayer>) -> Result<()> {
+    let clock = Clock::get()?;
+    let vault = ctx.accounts.vault.key();
+    ctx.accounts.player.set_inner(LazorPlayerProfile {
+        schema_version: LAZOR_PLAYER_SCHEMA_VERSION,
+        vault,
+        planet_count: 0,
+        ownership_page_count: 0,
+        created_at: clock.unix_timestamp,
+        last_active_slot: clock.slot,
+        suspended: false,
+        bump: ctx.bumps.player,
+    });
+    ctx.accounts.gameplay_profile.set_inner(PlayerProfile {
+        authority: vault,
+        planet_count: 0,
+        bump: ctx.bumps.gameplay_profile,
+    });
+    ctx.accounts.gameplay_authority.set_inner(AuthorizedVault {
+        authority: vault,
+        vault,
+        expires_at: 0,
+        revoked: false,
+        bump: ctx.bumps.gameplay_authority,
+    });
+
+    Ok(())
+}
+
+pub fn sponsor_account_rent(
+    ctx: Context<SponsorAccountRent>,
+    lamports: u64,
+) -> Result<()> {
+    require!(
+        lamports > 0 && lamports <= MAX_SPONSORED_RENT_LAMPORTS,
+        GameStateError::InvalidArgs
+    );
+    anchor_lang::system_program::transfer(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.sponsor.to_account_info(),
+                to: ctx.accounts.rent_receiver.to_account_info(),
+            },
+        ),
+        lamports,
+    )
+}
+
 /// One-time wallet setup: creates player profile + authorizes vault + stores encrypted backup.
 pub fn initialize_player(
     ctx: Context<InitializePlayer>,
@@ -2207,6 +2258,8 @@ struct PlanetBuildFields {
 }
 
 const PLANET_AUTHORITY_OFFSET: usize = 8;
+const PLANET_GALAXY_OFFSET: usize = 76;
+const PLANET_SYSTEM_OFFSET: usize = 78;
 const PLANET_TEMPERATURE_OFFSET: usize = 117;
 const PLANET_MAX_FIELDS_OFFSET: usize = 119;
 const PLANET_USED_FIELDS_OFFSET: usize = 121;
@@ -2887,7 +2940,12 @@ fn solar_satellite_energy_live(temperature: i16) -> u64 {
     ((temperature as i32 + 160).max(6) as u64 / 6).max(1)
 }
 
-fn start_build_live(planet: &mut PlanetBuildFields, building_idx: u8, now: i64) -> Result<()> {
+fn start_build_live(
+    planet: &mut PlanetBuildFields,
+    building_idx: u8,
+    now: i64,
+    speed_bonus_bps: u16,
+) -> Result<()> {
     settle_planet_deposit_fields(&mut planet.deposit, now)?;
     let current = building_level_live(planet, building_idx);
     let next = current.checked_add(1).ok_or(GameStateError::InvalidArgs)?;
@@ -2939,7 +2997,10 @@ fn start_build_live(planet: &mut PlanetBuildFields, building_idx: u8, now: i64) 
     planet.deposit.crystal = planet.deposit.crystal.saturating_sub(cc);
     planet.deposit.deuterium = planet.deposit.deuterium.saturating_sub(cd);
 
-    let dur = build_seconds(building_idx, next as u64, planet.robotics_factory as u64);
+    let dur = reduce_duration_by_bps(
+        build_seconds(building_idx, next as u64, planet.robotics_factory as u64),
+        speed_bonus_bps,
+    );
     planet.build_queue_item = building_idx;
     planet.build_queue_target = next;
     planet.build_finish_ts = now.saturating_add(dur);
@@ -2963,7 +3024,12 @@ fn finish_build_live(planet: &mut PlanetBuildFields, now: i64) -> Result<()> {
     Ok(())
 }
 
-fn start_research_live(planet: &mut PlanetBuildFields, tech_idx: u8, now: i64) -> Result<()> {
+fn start_research_live(
+    planet: &mut PlanetBuildFields,
+    tech_idx: u8,
+    now: i64,
+    speed_bonus_bps: u16,
+) -> Result<()> {
     settle_planet_deposit_fields(&mut planet.deposit, now)?;
     require!(tech_idx <= 9, GameStateError::InvalidTech);
     require!(planet.research_lab >= 1, GameStateError::LabTooLow);
@@ -3001,7 +3067,10 @@ fn start_research_live(planet: &mut PlanetBuildFields, tech_idx: u8, now: i64) -
     planet.deposit.crystal = planet.deposit.crystal.saturating_sub(cc);
     planet.deposit.deuterium = planet.deposit.deuterium.saturating_sub(cd);
 
-    let dur = research_seconds(next, planet.research_lab, planet.igr_network);
+    let dur = reduce_duration_by_bps(
+        research_seconds(next, planet.research_lab, planet.igr_network),
+        speed_bonus_bps,
+    );
     planet.research_queue_item = tech_idx;
     planet.research_queue_target = next;
     planet.research_finish_ts = now.saturating_add(dur);
@@ -3066,6 +3135,16 @@ fn read_u16_at(data: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes(bytes)
 }
 
+fn read_planet_authority_system(account_info: &AccountInfo) -> Result<(Pubkey, u16, u16)> {
+    let data = account_info.try_borrow_data()?;
+    require_planet_state_data(&data)?;
+    Ok((
+        read_pubkey_at(&data, PLANET_AUTHORITY_OFFSET),
+        read_u16_at(&data, PLANET_GALAXY_OFFSET),
+        read_u16_at(&data, PLANET_SYSTEM_OFFSET),
+    ))
+}
+
 fn read_u32_at(data: &[u8], offset: usize) -> u32 {
     let mut bytes = [0u8; 4];
     bytes.copy_from_slice(&data[offset..offset + 4]);
@@ -3119,6 +3198,7 @@ fn start_ship_build_bytes(
     ship_type: u8,
     quantity: u32,
     now: i64,
+    speed_bonus_bps: u16,
 ) -> Result<()> {
     if quantity == 0 {
         return raw_game_error(GameStateError::InvalidArgs);
@@ -3280,7 +3360,10 @@ fn start_ship_build_bytes(
     deuterium = deuterium.saturating_sub(total_d);
 
     let nanite = read_u8_at(&data, PLANET_NANITE_FACTORY_OFFSET);
-    let dur = ship_build_seconds(ship_type, quantity, shipyard, nanite);
+    let dur = reduce_duration_by_bps(
+        ship_build_seconds(ship_type, quantity, shipyard, nanite),
+        speed_bonus_bps,
+    );
     write_u64_at(&mut data, PLANET_METAL_OFFSET, metal);
     write_u64_at(&mut data, PLANET_CRYSTAL_OFFSET, crystal);
     write_u64_at(&mut data, PLANET_DEUTERIUM_OFFSET, deuterium);
@@ -3300,6 +3383,7 @@ fn start_defense_build_bytes(
     defense_type: u8,
     quantity: u32,
     now: i64,
+    speed_bonus_bps: u16,
 ) -> Result<()> {
     require!(quantity > 0, GameStateError::InvalidArgs);
     require!(now >= 0, GameStateError::InvalidTimestamp);
@@ -3415,7 +3499,10 @@ fn start_defense_build_bytes(
     deuterium = deuterium.saturating_sub(total_d);
 
     let nanite = read_u8_at(&data, PLANET_NANITE_FACTORY_OFFSET);
-    let dur = defense_build_seconds(defense_type, quantity, shipyard, nanite);
+    let dur = reduce_duration_by_bps(
+        defense_build_seconds(defense_type, quantity, shipyard, nanite),
+        speed_bonus_bps,
+    );
     write_u64_at(&mut data, PLANET_METAL_OFFSET, metal);
     write_u64_at(&mut data, PLANET_CRYSTAL_OFFSET, crystal);
     write_u64_at(&mut data, PLANET_DEUTERIUM_OFFSET, deuterium);
@@ -3524,6 +3611,610 @@ pub fn upgrade_alliance_building(
 
     ctx.accounts.alliance.xp = ctx.accounts.alliance.xp.saturating_add(xp);
     refresh_alliance_level(&mut ctx.accounts.alliance);
+    Ok(())
+}
+
+fn active_system_specialization<'info>(
+    program_id: &Pubkey,
+    remaining_accounts: &[AccountInfo<'info>],
+    authority: Pubkey,
+    galaxy: u16,
+    system: u16,
+    now: i64,
+) -> Result<Option<u8>> {
+    if remaining_accounts.is_empty() {
+        return Ok(None);
+    }
+    require!(remaining_accounts.len() >= 2, GameStateError::InvalidArgs);
+
+    let galaxy_seed = galaxy.to_le_bytes();
+    let system_seed = system.to_le_bytes();
+    let (expected_sovereignty, _) = Pubkey::find_program_address(
+        &[b"system_sovereignty", &galaxy_seed, &system_seed],
+        program_id,
+    );
+    require_keys_eq!(
+        remaining_accounts[0].key(),
+        expected_sovereignty,
+        GameStateError::InvalidSovereigntySystem
+    );
+    let (expected_membership, _) = Pubkey::find_program_address(
+        &[b"alliance_membership", authority.as_ref()],
+        program_id,
+    );
+    require_keys_eq!(
+        remaining_accounts[1].key(),
+        expected_membership,
+        GameStateError::InvalidAllianceMember
+    );
+
+    let sovereignty: SystemSovereignty =
+        read_program_account(&remaining_accounts[0], program_id)?;
+    let membership: AllianceMembership =
+        read_program_account(&remaining_accounts[1], program_id)?;
+    require!(
+        sovereignty.version == SYSTEM_SOVEREIGNTY_VERSION
+            && sovereignty.galaxy == galaxy
+            && sovereignty.system == system,
+        GameStateError::InvalidSovereigntySystem
+    );
+    require_keys_eq!(membership.authority, authority, GameStateError::Unauthorized);
+    require_keys_eq!(
+        membership.alliance,
+        sovereignty.alliance,
+        GameStateError::InvalidAllianceMember
+    );
+    if membership.role == 0 || now >= sovereignty.upkeep_paid_until {
+        return Ok(None);
+    }
+    Ok(Some(sovereignty.specialization))
+}
+
+fn industrial_speed_bonus(specialization: Option<u8>) -> u16 {
+    if specialization == Some(SYSTEM_SPECIALIZATION_INDUSTRIAL) {
+        INDUSTRIAL_BUILD_SPEED_BONUS_BPS
+    } else {
+        0
+    }
+}
+
+fn research_speed_bonus(specialization: Option<u8>) -> u16 {
+    if specialization == Some(SYSTEM_SPECIALIZATION_RESEARCH) {
+        RESEARCH_SPEED_BONUS_BPS
+    } else {
+        0
+    }
+}
+
+fn military_speed_bonus(specialization: Option<u8>) -> u16 {
+    if specialization == Some(SYSTEM_SPECIALIZATION_MILITARY) {
+        MILITARY_BUILD_SPEED_BONUS_BPS
+    } else {
+        0
+    }
+}
+
+fn debit_alliance_treasury(
+    treasury: &mut AllianceTreasuryState,
+    metal: u64,
+    crystal: u64,
+    deuterium: u64,
+) -> Result<()> {
+    require!(
+        treasury.metal >= metal
+            && treasury.crystal >= crystal
+            && treasury.deuterium >= deuterium,
+        GameStateError::AllianceTreasuryNotEnoughResources
+    );
+    treasury.metal = treasury.metal.saturating_sub(metal);
+    treasury.crystal = treasury.crystal.saturating_sub(crystal);
+    treasury.deuterium = treasury.deuterium.saturating_sub(deuterium);
+    Ok(())
+}
+
+fn system_sovereignty_is_claimable(sovereignty: &SystemSovereignty, now: i64) -> bool {
+    sovereignty.alliance == Pubkey::default() || now >= sovereignty.upkeep_paid_until
+}
+
+pub fn claim_system_sovereignty(
+    ctx: Context<ClaimSystemSovereignty>,
+    galaxy: u16,
+    system: u16,
+    specialization: u8,
+    vulnerability_hour_utc: u8,
+) -> Result<()> {
+    require!(
+        (1..=999).contains(&galaxy) && (1..=999).contains(&system),
+        GameStateError::InvalidSovereigntySystem
+    );
+    require!(
+        specialization <= MAX_SYSTEM_SPECIALIZATION,
+        GameStateError::InvalidSystemSpecialization
+    );
+    require!(
+        vulnerability_hour_utc < 24,
+        GameStateError::InvalidVulnerabilityHour
+    );
+
+    let now = chain_now()?;
+    require!(
+        system_sovereignty_is_claimable(&ctx.accounts.sovereignty, now),
+        GameStateError::SystemAlreadyClaimed
+    );
+    debit_alliance_treasury(
+        &mut ctx.accounts.alliance_treasury,
+        SYSTEM_SOVEREIGNTY_CLAIM_METAL,
+        SYSTEM_SOVEREIGNTY_CLAIM_CRYSTAL,
+        SYSTEM_SOVEREIGNTY_CLAIM_DEUTERIUM,
+    )?;
+
+    let upkeep_paid_until = now
+        .checked_add(SYSTEM_SOVEREIGNTY_UPKEEP_SECONDS)
+        .ok_or(GameStateError::InvalidTimestamp)?;
+    ctx.accounts.sovereignty.set_inner(SystemSovereignty {
+        version: SYSTEM_SOVEREIGNTY_VERSION,
+        alliance: ctx.accounts.alliance.key(),
+        claimant_planet: ctx.accounts.planet_state.key(),
+        galaxy,
+        system,
+        specialization,
+        vulnerability_hour_utc,
+        claimed_at: now,
+        upkeep_paid_until,
+        updated_at: now,
+        bump: ctx.bumps.sovereignty,
+    });
+
+    emit!(SystemSovereigntyClaimedEvent {
+        sovereignty: ctx.accounts.sovereignty.key(),
+        alliance: ctx.accounts.alliance.key(),
+        claimant_planet: ctx.accounts.planet_state.key(),
+        galaxy,
+        system,
+        specialization,
+        vulnerability_hour_utc,
+        upkeep_paid_until,
+    });
+    Ok(())
+}
+
+pub fn fund_system_sovereignty(
+    ctx: Context<FundSystemSovereignty>,
+    _galaxy: u16,
+    _system: u16,
+) -> Result<()> {
+    debit_alliance_treasury(
+        &mut ctx.accounts.alliance_treasury,
+        SYSTEM_SOVEREIGNTY_UPKEEP_METAL,
+        SYSTEM_SOVEREIGNTY_UPKEEP_CRYSTAL,
+        SYSTEM_SOVEREIGNTY_UPKEEP_DEUTERIUM,
+    )?;
+    let now = chain_now()?;
+    let base = ctx.accounts.sovereignty.upkeep_paid_until.max(now);
+    ctx.accounts.sovereignty.upkeep_paid_until = base
+        .checked_add(SYSTEM_SOVEREIGNTY_UPKEEP_SECONDS)
+        .ok_or(GameStateError::InvalidTimestamp)?;
+    ctx.accounts.sovereignty.updated_at = now;
+
+    emit!(SystemSovereigntyFundedEvent {
+        sovereignty: ctx.accounts.sovereignty.key(),
+        alliance: ctx.accounts.alliance.key(),
+        upkeep_paid_until: ctx.accounts.sovereignty.upkeep_paid_until,
+    });
+    Ok(())
+}
+
+pub fn set_system_sovereignty_specialization(
+    ctx: Context<SetSystemSovereigntySpecialization>,
+    _galaxy: u16,
+    _system: u16,
+    specialization: u8,
+) -> Result<()> {
+    require!(
+        specialization <= MAX_SYSTEM_SPECIALIZATION,
+        GameStateError::InvalidSystemSpecialization
+    );
+    let now = chain_now()?;
+    require!(
+        now < ctx.accounts.sovereignty.upkeep_paid_until,
+        GameStateError::SystemSovereigntyExpired
+    );
+    require!(
+        ctx.accounts.sovereignty.specialization != specialization,
+        GameStateError::InvalidSystemSpecialization
+    );
+    debit_alliance_treasury(
+        &mut ctx.accounts.alliance_treasury,
+        SYSTEM_SOVEREIGNTY_SPECIALIZATION_METAL,
+        SYSTEM_SOVEREIGNTY_SPECIALIZATION_CRYSTAL,
+        SYSTEM_SOVEREIGNTY_SPECIALIZATION_DEUTERIUM,
+    )?;
+    ctx.accounts.sovereignty.specialization = specialization;
+    ctx.accounts.sovereignty.updated_at = now;
+
+    emit!(SystemSovereigntySpecializationChangedEvent {
+        sovereignty: ctx.accounts.sovereignty.key(),
+        alliance: ctx.accounts.alliance.key(),
+        specialization,
+    });
+    Ok(())
+}
+
+pub fn initialize_alliance_governance(
+    ctx: Context<InitializeAllianceGovernance>,
+    dao: Pubkey,
+    governance_executor: Pubkey,
+) -> Result<()> {
+    require!(
+        dao != Pubkey::default()
+            && governance_executor != Pubkey::default()
+            && dao == ctx.accounts.gamesol_governance.dao
+            && governance_executor == ctx.accounts.gamesol_governance.governance_executor
+            && governance_executor != ctx.accounts.leader.key()
+            && governance_executor != ctx.accounts.admin.key(),
+        GameStateError::InvalidGovernanceConfiguration
+    );
+
+    ctx.accounts
+        .governance_config
+        .set_inner(AllianceGovernanceConfig {
+            version: ALLIANCE_GOVERNANCE_VERSION,
+            alliance: ctx.accounts.alliance.key(),
+            antimatter_mint: ctx.accounts.game_config.antimatter_mint,
+            dao,
+            governance_executor,
+            enabled: true,
+            proposal_count: 0,
+            bump: ctx.bumps.governance_config,
+        });
+
+    emit!(AllianceGovernanceInitializedEvent {
+        alliance: ctx.accounts.alliance.key(),
+        antimatter_mint: ctx.accounts.game_config.antimatter_mint,
+        dao,
+        governance_executor,
+    });
+    Ok(())
+}
+
+pub fn initialize_gamesol_governance(
+    ctx: Context<InitializeGamesolGovernance>,
+    dao: Pubkey,
+    governance_executor: Pubkey,
+) -> Result<()> {
+    require!(
+        dao != Pubkey::default()
+            && governance_executor != Pubkey::default()
+            && governance_executor != ctx.accounts.admin.key(),
+        GameStateError::InvalidGovernanceConfiguration
+    );
+    ctx.accounts
+        .gamesol_governance
+        .set_inner(GamesolGovernanceConfig {
+            version: GAMESOL_GOVERNANCE_VERSION,
+            antimatter_mint: ctx.accounts.game_config.antimatter_mint,
+            dao,
+            governance_executor,
+            enabled: true,
+            bump: ctx.bumps.gamesol_governance,
+        });
+    emit!(GamesolGovernanceInitializedEvent {
+        antimatter_mint: ctx.accounts.game_config.antimatter_mint,
+        dao,
+        governance_executor,
+    });
+    Ok(())
+}
+
+pub fn enroll_alliance_in_gamesol_governance(
+    ctx: Context<EnrollAllianceInGamesolGovernance>,
+) -> Result<()> {
+    let root = &ctx.accounts.gamesol_governance;
+    ctx.accounts
+        .governance_config
+        .set_inner(AllianceGovernanceConfig {
+            version: ALLIANCE_GOVERNANCE_VERSION,
+            alliance: ctx.accounts.alliance.key(),
+            antimatter_mint: root.antimatter_mint,
+            dao: root.dao,
+            governance_executor: root.governance_executor,
+            enabled: true,
+            proposal_count: 0,
+            bump: ctx.bumps.governance_config,
+        });
+    emit!(AllianceGovernanceInitializedEvent {
+        alliance: ctx.accounts.alliance.key(),
+        antimatter_mint: root.antimatter_mint,
+        dao: root.dao,
+        governance_executor: root.governance_executor,
+    });
+    Ok(())
+}
+
+pub fn sync_alliance_gamesol_governance(
+    ctx: Context<SyncAllianceGamesolGovernance>,
+) -> Result<()> {
+    let root = &ctx.accounts.gamesol_governance;
+    let config = &mut ctx.accounts.governance_config;
+    config.version = ALLIANCE_GOVERNANCE_VERSION;
+    config.antimatter_mint = root.antimatter_mint;
+    config.dao = root.dao;
+    config.governance_executor = root.governance_executor;
+    config.enabled = true;
+    emit!(AllianceGovernanceSyncedEvent {
+        alliance: ctx.accounts.alliance.key(),
+        dao: root.dao,
+        governance_executor: root.governance_executor,
+    });
+    Ok(())
+}
+
+fn validate_alliance_decision_action(
+    action: u8,
+    galaxy: u16,
+    system: u16,
+    specialization: u8,
+    vulnerability_hour_utc: u8,
+) -> Result<()> {
+    require!(
+        action <= MAX_ALLIANCE_DECISION_ACTION,
+        GameStateError::InvalidAllianceDecision
+    );
+    require!(
+        (1..=999).contains(&galaxy) && (1..=999).contains(&system),
+        GameStateError::InvalidSovereigntySystem
+    );
+    match action {
+        ALLIANCE_DECISION_CLAIM_SYSTEM => {
+            require!(
+                specialization <= MAX_SYSTEM_SPECIALIZATION,
+                GameStateError::InvalidSystemSpecialization
+            );
+            require!(
+                vulnerability_hour_utc < 24,
+                GameStateError::InvalidVulnerabilityHour
+            );
+        }
+        ALLIANCE_DECISION_FUND_UPKEEP => {
+            require!(
+                specialization == 0 && vulnerability_hour_utc == 0,
+                GameStateError::InvalidAllianceDecision
+            );
+        }
+        ALLIANCE_DECISION_SET_SPECIALIZATION => {
+            require!(
+                specialization <= MAX_SYSTEM_SPECIALIZATION && vulnerability_hour_utc == 0,
+                GameStateError::InvalidAllianceDecision
+            );
+        }
+        _ => return err!(GameStateError::InvalidAllianceDecision),
+    }
+    Ok(())
+}
+
+fn validate_alliance_decision_for_execution(
+    decision: &AllianceDecision,
+    galaxy: u16,
+    system: u16,
+) -> Result<()> {
+    require!(
+        !decision.executed,
+        GameStateError::AllianceDecisionAlreadyExecuted
+    );
+    require!(
+        decision.external_proposal != Pubkey::default()
+            && decision.galaxy == galaxy
+            && decision.system == system,
+        GameStateError::InvalidAllianceDecision
+    );
+    validate_alliance_decision_action(
+        decision.action,
+        galaxy,
+        system,
+        decision.specialization,
+        decision.vulnerability_hour_utc,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_alliance_decision(
+    ctx: Context<CreateAllianceDecision>,
+    proposal_id: u64,
+    external_proposal: Pubkey,
+    action: u8,
+    target_planet: Pubkey,
+    galaxy: u16,
+    system: u16,
+    specialization: u8,
+    vulnerability_hour_utc: u8,
+    expires_at: i64,
+) -> Result<()> {
+    require!(
+        proposal_id == ctx.accounts.governance_config.proposal_count,
+        GameStateError::InvalidAllianceDecision
+    );
+    require!(
+        external_proposal != Pubkey::default() && target_planet != Pubkey::default(),
+        GameStateError::InvalidAllianceDecision
+    );
+    validate_alliance_decision_action(
+        action,
+        galaxy,
+        system,
+        specialization,
+        vulnerability_hour_utc,
+    )?;
+
+    let now = chain_now()?;
+    let max_expires_at = now
+        .checked_add(MAX_ALLIANCE_DECISION_LIFETIME_SECONDS)
+        .ok_or(GameStateError::InvalidTimestamp)?;
+    require!(
+        expires_at > now && expires_at <= max_expires_at,
+        GameStateError::InvalidAllianceDecision
+    );
+
+    ctx.accounts.decision.set_inner(AllianceDecision {
+        version: ALLIANCE_DECISION_VERSION,
+        id: proposal_id,
+        alliance: ctx.accounts.alliance.key(),
+        proposer: ctx.accounts.proposer.key(),
+        external_proposal,
+        action,
+        target_planet,
+        galaxy,
+        system,
+        specialization,
+        vulnerability_hour_utc,
+        created_at: now,
+        expires_at,
+        executed_at: 0,
+        executed: false,
+        bump: ctx.bumps.decision,
+    });
+    ctx.accounts.governance_config.proposal_count = ctx
+        .accounts
+        .governance_config
+        .proposal_count
+        .checked_add(1)
+        .ok_or(GameStateError::InvalidAllianceDecision)?;
+
+    emit!(AllianceDecisionCreatedEvent {
+        decision: ctx.accounts.decision.key(),
+        alliance: ctx.accounts.alliance.key(),
+        id: proposal_id,
+        proposer: ctx.accounts.proposer.key(),
+        external_proposal,
+        action,
+        galaxy,
+        system,
+        expires_at,
+    });
+    Ok(())
+}
+
+pub fn execute_alliance_decision(
+    ctx: Context<ExecuteAllianceDecision>,
+    _proposal_id: u64,
+    galaxy: u16,
+    system: u16,
+) -> Result<()> {
+    let now = chain_now()?;
+    let decision = &ctx.accounts.decision;
+    // `expires_at` is the proposal/trading deadline. A passed proposal may only
+    // become executable after that deadline, so it must not also invalidate the
+    // approved game instruction. Executor authority, immutable decision fields,
+    // action-specific account constraints and the one-time `executed` flag remain
+    // the fail-closed execution boundary.
+    validate_alliance_decision_for_execution(decision, galaxy, system)?;
+
+    match decision.action {
+        ALLIANCE_DECISION_CLAIM_SYSTEM => {
+            require!(
+                ctx.accounts.planet_state.galaxy == galaxy
+                    && ctx.accounts.planet_state.system == system,
+                GameStateError::InvalidSovereigntySystem
+            );
+            require!(
+                system_sovereignty_is_claimable(&ctx.accounts.sovereignty, now),
+                GameStateError::SystemAlreadyClaimed
+            );
+            debit_alliance_treasury(
+                &mut ctx.accounts.alliance_treasury,
+                SYSTEM_SOVEREIGNTY_CLAIM_METAL,
+                SYSTEM_SOVEREIGNTY_CLAIM_CRYSTAL,
+                SYSTEM_SOVEREIGNTY_CLAIM_DEUTERIUM,
+            )?;
+            let upkeep_paid_until = now
+                .checked_add(SYSTEM_SOVEREIGNTY_UPKEEP_SECONDS)
+                .ok_or(GameStateError::InvalidTimestamp)?;
+            ctx.accounts.sovereignty.set_inner(SystemSovereignty {
+                version: SYSTEM_SOVEREIGNTY_VERSION,
+                alliance: ctx.accounts.alliance.key(),
+                claimant_planet: ctx.accounts.planet_state.key(),
+                galaxy,
+                system,
+                specialization: decision.specialization,
+                vulnerability_hour_utc: decision.vulnerability_hour_utc,
+                claimed_at: now,
+                upkeep_paid_until,
+                updated_at: now,
+                bump: ctx.bumps.sovereignty,
+            });
+            emit!(SystemSovereigntyClaimedEvent {
+                sovereignty: ctx.accounts.sovereignty.key(),
+                alliance: ctx.accounts.alliance.key(),
+                claimant_planet: ctx.accounts.planet_state.key(),
+                galaxy,
+                system,
+                specialization: decision.specialization,
+                vulnerability_hour_utc: decision.vulnerability_hour_utc,
+                upkeep_paid_until,
+            });
+        }
+        ALLIANCE_DECISION_FUND_UPKEEP => {
+            require!(
+                ctx.accounts.sovereignty.alliance == ctx.accounts.alliance.key(),
+                GameStateError::InvalidAllianceMember
+            );
+            debit_alliance_treasury(
+                &mut ctx.accounts.alliance_treasury,
+                SYSTEM_SOVEREIGNTY_UPKEEP_METAL,
+                SYSTEM_SOVEREIGNTY_UPKEEP_CRYSTAL,
+                SYSTEM_SOVEREIGNTY_UPKEEP_DEUTERIUM,
+            )?;
+            let base = ctx.accounts.sovereignty.upkeep_paid_until.max(now);
+            ctx.accounts.sovereignty.upkeep_paid_until = base
+                .checked_add(SYSTEM_SOVEREIGNTY_UPKEEP_SECONDS)
+                .ok_or(GameStateError::InvalidTimestamp)?;
+            ctx.accounts.sovereignty.updated_at = now;
+            emit!(SystemSovereigntyFundedEvent {
+                sovereignty: ctx.accounts.sovereignty.key(),
+                alliance: ctx.accounts.alliance.key(),
+                upkeep_paid_until: ctx.accounts.sovereignty.upkeep_paid_until,
+            });
+        }
+        ALLIANCE_DECISION_SET_SPECIALIZATION => {
+            require!(
+                ctx.accounts.sovereignty.alliance == ctx.accounts.alliance.key(),
+                GameStateError::InvalidAllianceMember
+            );
+            require!(
+                now < ctx.accounts.sovereignty.upkeep_paid_until,
+                GameStateError::SystemSovereigntyExpired
+            );
+            require!(
+                ctx.accounts.sovereignty.specialization != decision.specialization,
+                GameStateError::InvalidSystemSpecialization
+            );
+            debit_alliance_treasury(
+                &mut ctx.accounts.alliance_treasury,
+                SYSTEM_SOVEREIGNTY_SPECIALIZATION_METAL,
+                SYSTEM_SOVEREIGNTY_SPECIALIZATION_CRYSTAL,
+                SYSTEM_SOVEREIGNTY_SPECIALIZATION_DEUTERIUM,
+            )?;
+            ctx.accounts.sovereignty.specialization = decision.specialization;
+            ctx.accounts.sovereignty.updated_at = now;
+            emit!(SystemSovereigntySpecializationChangedEvent {
+                sovereignty: ctx.accounts.sovereignty.key(),
+                alliance: ctx.accounts.alliance.key(),
+                specialization: decision.specialization,
+            });
+        }
+        _ => return err!(GameStateError::InvalidAllianceDecision),
+    }
+
+    let decision = &mut ctx.accounts.decision;
+    decision.executed = true;
+    decision.executed_at = now;
+    emit!(AllianceDecisionExecutedEvent {
+        decision: decision.key(),
+        alliance: ctx.accounts.alliance.key(),
+        id: decision.id,
+        external_proposal: decision.external_proposal,
+        action: decision.action,
+        executed_at: now,
+    });
     Ok(())
 }
 
@@ -5981,7 +6672,21 @@ pub fn produce_vault(ctx: Context<MutatePlanetStateVault>, _now: i64) -> Result<
 
 pub fn start_build(ctx: Context<MutatePlanetState>, building_idx: u8, _now: i64) -> Result<()> {
     let now = chain_now()?;
-    start_build_planet(&mut ctx.accounts.planet_state, building_idx, now)
+    let planet = &ctx.accounts.planet_state;
+    let specialization = active_system_specialization(
+        ctx.program_id,
+        ctx.remaining_accounts,
+        planet.authority,
+        planet.galaxy,
+        planet.system,
+        now,
+    )?;
+    start_build_planet_with_bonus(
+        &mut ctx.accounts.planet_state,
+        building_idx,
+        now,
+        industrial_speed_bonus(specialization),
+    )
 }
 
 pub fn start_build_vault(
@@ -5999,7 +6704,21 @@ pub fn start_build_vault(
         planet.deposit.authority,
     )?;
     let now = chain_now()?;
-    start_build_live(&mut planet, building_idx, now)?;
+    let (_, galaxy, system) = read_planet_authority_system(&planet_info)?;
+    let specialization = active_system_specialization(
+        ctx.program_id,
+        ctx.remaining_accounts,
+        planet.deposit.authority,
+        galaxy,
+        system,
+        now,
+    )?;
+    start_build_live(
+        &mut planet,
+        building_idx,
+        now,
+        industrial_speed_bonus(specialization),
+    )?;
     write_planet_build_fields(&planet_info, &planet)
 }
 
@@ -6025,7 +6744,21 @@ pub fn finish_build_vault(ctx: Context<MutatePlanetStateVault>, _now: i64) -> Re
 
 pub fn start_research(ctx: Context<MutatePlanetState>, tech_idx: u8, _now: i64) -> Result<()> {
     let now = chain_now()?;
-    start_research_planet(&mut ctx.accounts.planet_state, tech_idx, now)
+    let planet = &ctx.accounts.planet_state;
+    let specialization = active_system_specialization(
+        ctx.program_id,
+        ctx.remaining_accounts,
+        planet.authority,
+        planet.galaxy,
+        planet.system,
+        now,
+    )?;
+    start_research_planet_with_bonus(
+        &mut ctx.accounts.planet_state,
+        tech_idx,
+        now,
+        research_speed_bonus(specialization),
+    )
 }
 
 pub fn start_research_vault(
@@ -6043,7 +6776,21 @@ pub fn start_research_vault(
         planet.deposit.authority,
     )?;
     let now = chain_now()?;
-    start_research_live(&mut planet, tech_idx, now)?;
+    let (_, galaxy, system) = read_planet_authority_system(&planet_info)?;
+    let specialization = active_system_specialization(
+        ctx.program_id,
+        ctx.remaining_accounts,
+        planet.deposit.authority,
+        galaxy,
+        system,
+        now,
+    )?;
+    start_research_live(
+        &mut planet,
+        tech_idx,
+        now,
+        research_speed_bonus(specialization),
+    )?;
     write_planet_build_fields(&planet_info, &planet)
 }
 
@@ -6074,7 +6821,22 @@ pub fn build_ship(
     _now: i64,
 ) -> Result<()> {
     let now = chain_now()?;
-    build_ship_planet(&mut ctx.accounts.planet_state, ship_type, quantity, now)
+    let planet = &ctx.accounts.planet_state;
+    let specialization = active_system_specialization(
+        ctx.program_id,
+        ctx.remaining_accounts,
+        planet.authority,
+        planet.galaxy,
+        planet.system,
+        now,
+    )?;
+    build_ship_planet_with_bonus(
+        &mut ctx.accounts.planet_state,
+        ship_type,
+        quantity,
+        now,
+        military_speed_bonus(specialization),
+    )
 }
 
 pub fn build_ship_vault(
@@ -6084,7 +6846,7 @@ pub fn build_ship_vault(
     _now: i64,
 ) -> Result<()> {
     let planet_info = ctx.accounts.planet_state.to_account_info();
-    let authority = {
+    let (authority, galaxy, system) = {
         if *planet_info.owner != *ctx.program_id {
             return raw_game_error(GameStateError::Unauthorized);
         }
@@ -6092,7 +6854,11 @@ pub fn build_ship_vault(
         if require_planet_state_data(&data).is_err() {
             return raw_game_error(GameStateError::InvalidArgs);
         }
-        read_pubkey_at(&data, PLANET_AUTHORITY_OFFSET)
+        (
+            read_pubkey_at(&data, PLANET_AUTHORITY_OFFSET),
+            read_u16_at(&data, PLANET_GALAXY_OFFSET),
+            read_u16_at(&data, PLANET_SYSTEM_OFFSET),
+        )
     };
     require_active_vault_for_live_planet(
         ctx.program_id,
@@ -6102,7 +6868,21 @@ pub fn build_ship_vault(
         authority,
     )?;
     let now = chain_now()?;
-    start_ship_build_bytes(&planet_info, ship_type, quantity, now)
+    let specialization = active_system_specialization(
+        ctx.program_id,
+        ctx.remaining_accounts,
+        authority,
+        galaxy,
+        system,
+        now,
+    )?;
+    start_ship_build_bytes(
+        &planet_info,
+        ship_type,
+        quantity,
+        now,
+        military_speed_bonus(specialization),
+    )
 }
 
 pub fn finish_ship_build(ctx: Context<MutatePlanetState>, _now: i64) -> Result<()> {
@@ -6132,7 +6912,22 @@ pub fn build_defense(
     _now: i64,
 ) -> Result<()> {
     let now = chain_now()?;
-    build_defense_planet(&mut ctx.accounts.planet_state, defense_type, quantity, now)
+    let planet = &ctx.accounts.planet_state;
+    let specialization = active_system_specialization(
+        ctx.program_id,
+        ctx.remaining_accounts,
+        planet.authority,
+        planet.galaxy,
+        planet.system,
+        now,
+    )?;
+    build_defense_planet_with_bonus(
+        &mut ctx.accounts.planet_state,
+        defense_type,
+        quantity,
+        now,
+        military_speed_bonus(specialization),
+    )
 }
 
 pub fn build_defense_vault(
@@ -6142,7 +6937,7 @@ pub fn build_defense_vault(
     _now: i64,
 ) -> Result<()> {
     let planet_info = ctx.accounts.planet_state.to_account_info();
-    let authority = {
+    let (authority, galaxy, system) = {
         require_keys_eq!(
             *planet_info.owner,
             *ctx.program_id,
@@ -6150,7 +6945,11 @@ pub fn build_defense_vault(
         );
         let data = planet_info.try_borrow_data()?;
         require_planet_state_data(&data)?;
-        read_pubkey_at(&data, PLANET_AUTHORITY_OFFSET)
+        (
+            read_pubkey_at(&data, PLANET_AUTHORITY_OFFSET),
+            read_u16_at(&data, PLANET_GALAXY_OFFSET),
+            read_u16_at(&data, PLANET_SYSTEM_OFFSET),
+        )
     };
     require_active_vault_for_live_planet(
         ctx.program_id,
@@ -6160,7 +6959,21 @@ pub fn build_defense_vault(
         authority,
     )?;
     let now = chain_now()?;
-    start_defense_build_bytes(&planet_info, defense_type, quantity, now)
+    let specialization = active_system_specialization(
+        ctx.program_id,
+        ctx.remaining_accounts,
+        authority,
+        galaxy,
+        system,
+        now,
+    )?;
+    start_defense_build_bytes(
+        &planet_info,
+        defense_type,
+        quantity,
+        now,
+        military_speed_bonus(specialization),
+    )
 }
 
 pub fn finish_defense_build(ctx: Context<MutatePlanetState>, _now: i64) -> Result<()> {
@@ -7069,6 +7882,179 @@ mod tests {
             total_antimatter_deposited: 0,
             bump: 0,
         }
+    }
+
+    fn system_sovereignty(alliance: Pubkey, upkeep_paid_until: i64) -> SystemSovereignty {
+        SystemSovereignty {
+            version: SYSTEM_SOVEREIGNTY_VERSION,
+            alliance,
+            claimant_planet: Pubkey::new_unique(),
+            galaxy: 7,
+            system: 482,
+            specialization: 0,
+            vulnerability_hour_utc: 18,
+            claimed_at: 100,
+            upkeep_paid_until,
+            updated_at: 100,
+            bump: 255,
+        }
+    }
+
+    #[test]
+    fn sovereignty_cost_debits_real_treasury_balances() {
+        let mut treasury = empty_alliance_treasury();
+        treasury.metal = SYSTEM_SOVEREIGNTY_CLAIM_METAL + 10;
+        treasury.crystal = SYSTEM_SOVEREIGNTY_CLAIM_CRYSTAL + 20;
+        treasury.deuterium = SYSTEM_SOVEREIGNTY_CLAIM_DEUTERIUM + 30;
+
+        debit_alliance_treasury(
+            &mut treasury,
+            SYSTEM_SOVEREIGNTY_CLAIM_METAL,
+            SYSTEM_SOVEREIGNTY_CLAIM_CRYSTAL,
+            SYSTEM_SOVEREIGNTY_CLAIM_DEUTERIUM,
+        )
+        .unwrap();
+
+        assert_eq!(treasury.metal, 10);
+        assert_eq!(treasury.crystal, 20);
+        assert_eq!(treasury.deuterium, 30);
+    }
+
+    #[test]
+    fn sovereignty_cost_rejects_insufficient_treasury_without_mutation() {
+        let mut treasury = empty_alliance_treasury();
+        treasury.metal = SYSTEM_SOVEREIGNTY_CLAIM_METAL;
+        treasury.crystal = SYSTEM_SOVEREIGNTY_CLAIM_CRYSTAL - 1;
+        treasury.deuterium = SYSTEM_SOVEREIGNTY_CLAIM_DEUTERIUM;
+        let before = (treasury.metal, treasury.crystal, treasury.deuterium);
+
+        assert!(debit_alliance_treasury(
+            &mut treasury,
+            SYSTEM_SOVEREIGNTY_CLAIM_METAL,
+            SYSTEM_SOVEREIGNTY_CLAIM_CRYSTAL,
+            SYSTEM_SOVEREIGNTY_CLAIM_DEUTERIUM,
+        )
+        .is_err());
+        assert_eq!(
+            (treasury.metal, treasury.crystal, treasury.deuterium),
+            before
+        );
+    }
+
+    #[test]
+    fn sovereignty_claim_requires_unclaimed_or_expired_system() {
+        let unclaimed = system_sovereignty(Pubkey::default(), 0);
+        let active = system_sovereignty(Pubkey::new_unique(), 200);
+        let expired = system_sovereignty(Pubkey::new_unique(), 100);
+
+        assert!(system_sovereignty_is_claimable(&unclaimed, 150));
+        assert!(!system_sovereignty_is_claimable(&active, 150));
+        assert!(system_sovereignty_is_claimable(&expired, 150));
+        assert!(system_sovereignty_is_claimable(&expired, 100));
+    }
+
+    #[test]
+    fn governed_sovereignty_actions_accept_only_exact_parameter_shapes() {
+        assert!(validate_alliance_decision_action(
+            ALLIANCE_DECISION_CLAIM_SYSTEM,
+            7,
+            482,
+            3,
+            23,
+        )
+        .is_ok());
+        assert!(validate_alliance_decision_action(
+            ALLIANCE_DECISION_FUND_UPKEEP,
+            7,
+            482,
+            0,
+            0,
+        )
+        .is_ok());
+        assert!(validate_alliance_decision_action(
+            ALLIANCE_DECISION_SET_SPECIALIZATION,
+            7,
+            482,
+            2,
+            0,
+        )
+        .is_ok());
+
+        assert!(validate_alliance_decision_action(3, 7, 482, 0, 0).is_err());
+        assert!(validate_alliance_decision_action(
+            ALLIANCE_DECISION_CLAIM_SYSTEM,
+            7,
+            482,
+            4,
+            23,
+        )
+        .is_err());
+        assert!(validate_alliance_decision_action(
+            ALLIANCE_DECISION_CLAIM_SYSTEM,
+            7,
+            482,
+            0,
+            24,
+        )
+        .is_err());
+        assert!(validate_alliance_decision_action(
+            ALLIANCE_DECISION_FUND_UPKEEP,
+            7,
+            482,
+            1,
+            0,
+        )
+        .is_err());
+        assert!(validate_alliance_decision_action(
+            ALLIANCE_DECISION_SET_SPECIALIZATION,
+            0,
+            482,
+            1,
+            0,
+        )
+        .is_err());
+    }
+
+    fn alliance_decision(expires_at: i64) -> AllianceDecision {
+        AllianceDecision {
+            version: ALLIANCE_DECISION_VERSION,
+            id: 0,
+            alliance: Pubkey::new_unique(),
+            proposer: Pubkey::new_unique(),
+            external_proposal: Pubkey::new_unique(),
+            action: ALLIANCE_DECISION_CLAIM_SYSTEM,
+            target_planet: Pubkey::new_unique(),
+            galaxy: 6,
+            system: 175,
+            specialization: 0,
+            vulnerability_hour_utc: 12,
+            created_at: 100,
+            expires_at,
+            executed_at: 0,
+            executed: false,
+            bump: 255,
+        }
+    }
+
+    #[test]
+    fn finalized_decision_remains_executable_after_trading_deadline() {
+        let decision = alliance_decision(200);
+
+        // Execution happens after the market deadline in the real futarchy
+        // lifecycle. The deadline is intentionally not an execution veto.
+        assert!(validate_alliance_decision_for_execution(&decision, 6, 175).is_ok());
+    }
+
+    #[test]
+    fn alliance_decision_execution_still_fails_closed() {
+        let mut decision = alliance_decision(200);
+
+        assert!(validate_alliance_decision_for_execution(&decision, 7, 175).is_err());
+        decision.external_proposal = Pubkey::default();
+        assert!(validate_alliance_decision_for_execution(&decision, 6, 175).is_err());
+        decision.external_proposal = Pubkey::new_unique();
+        decision.executed = true;
+        assert!(validate_alliance_decision_for_execution(&decision, 6, 175).is_err());
     }
 
     fn inactive_membership(authority: Pubkey, alliance: Pubkey) -> AllianceMembership {

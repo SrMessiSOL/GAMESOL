@@ -14,6 +14,24 @@ pub struct PlayerProfile {
     pub bump: u8,
 }
 
+/// Canonical player identity for the Lazor-native universe.
+///
+/// `vault` is the permanent Lazor wallet PDA. GAMESOL never creates or stores
+/// a second private key for this profile. Both passkey and scoped-session
+/// execution resolve to this same authority at the Solana instruction layer.
+#[account]
+#[derive(InitSpace)]
+pub struct LazorPlayerProfile {
+    pub schema_version: u8,
+    pub vault: Pubkey,
+    pub planet_count: u32,
+    pub ownership_page_count: u32,
+    pub created_at: i64,
+    pub last_active_slot: u64,
+    pub suspended: bool,
+    pub bump: u8,
+}
+
 #[account]
 #[derive(InitSpace)]
 pub struct PlanetOwnerIndex {
@@ -162,6 +180,67 @@ pub struct AllianceJoinRequest {
     pub applicant: Pubkey,
     pub alliance: Pubkey,
     pub created_at: i64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct SystemSovereignty {
+    pub version: u8,
+    pub alliance: Pubkey,
+    pub claimant_planet: Pubkey,
+    pub galaxy: u16,
+    pub system: u16,
+    pub specialization: u8,
+    pub vulnerability_hour_utc: u8,
+    pub claimed_at: i64,
+    pub upkeep_paid_until: i64,
+    pub updated_at: i64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct GamesolGovernanceConfig {
+    pub version: u8,
+    pub antimatter_mint: Pubkey,
+    pub dao: Pubkey,
+    pub governance_executor: Pubkey,
+    pub enabled: bool,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct AllianceGovernanceConfig {
+    pub version: u8,
+    pub alliance: Pubkey,
+    pub antimatter_mint: Pubkey,
+    pub dao: Pubkey,
+    pub governance_executor: Pubkey,
+    pub enabled: bool,
+    pub proposal_count: u64,
+    pub bump: u8,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct AllianceDecision {
+    pub version: u8,
+    pub id: u64,
+    pub alliance: Pubkey,
+    pub proposer: Pubkey,
+    pub external_proposal: Pubkey,
+    pub action: u8,
+    pub target_planet: Pubkey,
+    pub galaxy: u16,
+    pub system: u16,
+    pub specialization: u8,
+    pub vulnerability_hour_utc: u8,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub executed_at: i64,
+    pub executed: bool,
     pub bump: u8,
 }
 
@@ -712,6 +791,77 @@ pub struct EspionageReportEvent {
     pub reported_armor_technology: u8,
 }
 
+#[event]
+pub struct SystemSovereigntyClaimedEvent {
+    pub sovereignty: Pubkey,
+    pub alliance: Pubkey,
+    pub claimant_planet: Pubkey,
+    pub galaxy: u16,
+    pub system: u16,
+    pub specialization: u8,
+    pub vulnerability_hour_utc: u8,
+    pub upkeep_paid_until: i64,
+}
+
+#[event]
+pub struct SystemSovereigntyFundedEvent {
+    pub sovereignty: Pubkey,
+    pub alliance: Pubkey,
+    pub upkeep_paid_until: i64,
+}
+
+#[event]
+pub struct SystemSovereigntySpecializationChangedEvent {
+    pub sovereignty: Pubkey,
+    pub alliance: Pubkey,
+    pub specialization: u8,
+}
+
+#[event]
+pub struct AllianceGovernanceInitializedEvent {
+    pub alliance: Pubkey,
+    pub antimatter_mint: Pubkey,
+    pub dao: Pubkey,
+    pub governance_executor: Pubkey,
+}
+
+#[event]
+pub struct GamesolGovernanceInitializedEvent {
+    pub antimatter_mint: Pubkey,
+    pub dao: Pubkey,
+    pub governance_executor: Pubkey,
+}
+
+#[event]
+pub struct AllianceGovernanceSyncedEvent {
+    pub alliance: Pubkey,
+    pub dao: Pubkey,
+    pub governance_executor: Pubkey,
+}
+
+#[event]
+pub struct AllianceDecisionCreatedEvent {
+    pub decision: Pubkey,
+    pub alliance: Pubkey,
+    pub id: u64,
+    pub proposer: Pubkey,
+    pub external_proposal: Pubkey,
+    pub action: u8,
+    pub galaxy: u16,
+    pub system: u16,
+    pub expires_at: i64,
+}
+
+#[event]
+pub struct AllianceDecisionExecutedEvent {
+    pub decision: Pubkey,
+    pub alliance: Pubkey,
+    pub id: u64,
+    pub external_proposal: Pubkey,
+    pub action: u8,
+    pub executed_at: i64,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct InitializePlanetParams {
     pub name: String,
@@ -865,6 +1015,44 @@ pub struct LaunchFleetParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::*;
+
+    #[test]
+    fn sponsored_rent_spaces_match_client_contract() {
+        assert_eq!(LAZOR_PLAYER_PROFILE_SPACE, 67);
+        assert_eq!(PLAYER_PROFILE_SPACE, 45);
+        assert_eq!(AUTHORIZED_VAULT_SPACE, 82);
+        assert_eq!(PLANET_STATE_SPACE, 1_002);
+        assert_eq!(PLANET_COORDS_SPACE, 94);
+        assert_eq!(PLANET_OWNER_INDEX_SPACE, 78);
+        assert_eq!(PLANET_OWNERSHIP_REGISTRY_SPACE, 105);
+        assert_eq!(QUEST_STATE_SPACE, 119);
+        assert_eq!(QUEST_PROGRESS_STATE_SPACE, 157);
+        assert_eq!(QUEST_REWARD_TARGET_STATE_SPACE, 649);
+        assert_eq!(TUTORIAL_QUEST_REWARD_TARGET_STATE_SPACE, 721);
+        assert_eq!(STORE_PURCHASE_STATE_SPACE, 97);
+        assert_eq!(ALLIANCE_STATE_SPACE, 103);
+        assert_eq!(ALLIANCE_METADATA_SPACE, 204);
+        assert_eq!(ALLIANCE_TREASURY_SPACE, 109);
+        assert_eq!(ALLIANCE_MEMBERSHIP_SPACE, 130);
+        assert_eq!(ALLIANCE_JOIN_REQUEST_SPACE, 81);
+        assert_eq!(SYSTEM_SOVEREIGNTY_SPACE, 104);
+        assert_eq!(ALLIANCE_GOVERNANCE_CONFIG_SPACE, 147);
+        assert_eq!(ALLIANCE_DECISION_SPACE, 178);
+    }
+
+    #[test]
+    fn system_sovereignty_layout_matches_client_contract() {
+        assert_eq!(SystemSovereignty::INIT_SPACE, 96);
+        assert_eq!(8 + SystemSovereignty::INIT_SPACE, 104);
+    }
+
+    #[test]
+    fn alliance_governance_layouts_match_client_contract() {
+        assert_eq!(GamesolGovernanceConfig::INIT_SPACE, 99);
+        assert_eq!(AllianceGovernanceConfig::INIT_SPACE, 139);
+        assert_eq!(AllianceDecision::INIT_SPACE, 170);
+    }
 
     fn test_planet() -> PlanetState {
         PlanetState {

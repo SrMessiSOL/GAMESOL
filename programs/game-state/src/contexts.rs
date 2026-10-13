@@ -6,6 +6,58 @@ use crate::constants::*;
 use crate::error::GameStateError;
 use crate::state::*;
 
+/// Initializes the permanent player identity owned directly by a Lazor vault.
+/// No encrypted key backup or delegated browser key is created.
+#[derive(Accounts)]
+pub struct InitializeLazorPlayer<'info> {
+    #[account(mut)]
+    pub vault: Signer<'info>,
+    #[account(
+        init,
+        payer = vault,
+        space = LAZOR_PLAYER_PROFILE_SPACE,
+        seeds = [b"player", vault.key().as_ref()],
+        bump
+    )]
+    pub player: Account<'info, LazorPlayerProfile>,
+    /// Compatibility index for the proven gameplay engine while its account
+    /// seeds are migrated to `player`. It has the same Lazor vault authority.
+    #[account(
+        init,
+        payer = vault,
+        space = PLAYER_PROFILE_SPACE,
+        seeds = [b"player_profile", vault.key().as_ref()],
+        bump
+    )]
+    pub gameplay_profile: Account<'info, PlayerProfile>,
+    /// Self-authorization bridge for existing gameplay contexts. Both fields
+    /// are the same permanent Lazor vault; no delegated key exists.
+    #[account(
+        init,
+        payer = vault,
+        space = AUTHORIZED_VAULT_SPACE,
+        seeds = [b"authorized_vault", vault.key().as_ref()],
+        bump
+    )]
+    pub gameplay_authority: Account<'info, AuthorizedVault>,
+    pub system_program: Program<'info, System>,
+}
+
+/// Moves a bounded rent contribution into a player vault. This instruction is
+/// composed atomically with an account-creating game instruction, so the vault
+/// remains the authority while an independent signer covers the rent.
+#[derive(Accounts)]
+pub struct SponsorAccountRent<'info> {
+    #[account(mut)]
+    pub sponsor: Signer<'info>,
+    /// CHECK: The sponsor voluntarily chooses the receiver. The hosted
+    /// paymaster additionally requires the funds to be consumed by approved
+    /// GAMESOL account creation in the same transaction.
+    #[account(mut)]
+    pub rent_receiver: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
 #[derive(Accounts)]
 pub struct InitializePlayer<'info> {
     #[account(mut)]
@@ -703,7 +755,9 @@ pub struct ApproveJoinRequest<'info> {
         constraint = leader_membership.role == 2 @ GameStateError::AllianceLeaderRequired
     )]
     pub leader_membership: Account<'info, AllianceMembership>,
-    /// CHECK: applicant is stored in the join request and used as the membership PDA seed.
+    /// CHECK: applicant is stored in the join request, receives its closed rent,
+    /// and is used as the membership PDA seed.
+    #[account(mut)]
     pub applicant: UncheckedAccount<'info>,
     #[account(
         mut,
@@ -966,6 +1020,314 @@ pub struct UpgradeAllianceBuilding<'info> {
         has_one = alliance @ GameStateError::InvalidAllianceMember
     )]
     pub alliance_treasury: Account<'info, AllianceTreasuryState>,
+}
+
+#[derive(Accounts)]
+#[instruction(galaxy: u16, system: u16)]
+pub struct ClaimSystemSovereignty<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub alliance: Account<'info, AllianceState>,
+    #[account(
+        seeds = [b"alliance_membership", authority.key().as_ref()],
+        bump = membership.bump,
+        has_one = authority @ GameStateError::Unauthorized,
+        has_one = alliance @ GameStateError::InvalidAllianceMember,
+        constraint = membership.role == 2 @ GameStateError::AllianceLeaderRequired
+    )]
+    pub membership: Account<'info, AllianceMembership>,
+    #[account(
+        mut,
+        seeds = [b"alliance_treasury", alliance.key().as_ref()],
+        bump = alliance_treasury.bump,
+        has_one = alliance @ GameStateError::InvalidAllianceMember
+    )]
+    pub alliance_treasury: Account<'info, AllianceTreasuryState>,
+    #[account(
+        has_one = authority @ GameStateError::Unauthorized,
+        constraint = planet_state.galaxy == galaxy @ GameStateError::InvalidSovereigntySystem,
+        constraint = planet_state.system == system @ GameStateError::InvalidSovereigntySystem
+    )]
+    pub planet_state: Account<'info, PlanetState>,
+    #[account(
+        init_if_needed,
+        payer = authority,
+        space = SYSTEM_SOVEREIGNTY_SPACE,
+        seeds = [b"system_sovereignty".as_ref(), galaxy.to_le_bytes().as_ref(), system.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub sovereignty: Account<'info, SystemSovereignty>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(galaxy: u16, system: u16)]
+pub struct FundSystemSovereignty<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub alliance: Account<'info, AllianceState>,
+    #[account(
+        seeds = [b"alliance_membership", authority.key().as_ref()],
+        bump = membership.bump,
+        has_one = authority @ GameStateError::Unauthorized,
+        has_one = alliance @ GameStateError::InvalidAllianceMember,
+        constraint = membership.role > 0 @ GameStateError::InvalidAllianceMember
+    )]
+    pub membership: Account<'info, AllianceMembership>,
+    #[account(
+        mut,
+        seeds = [b"alliance_treasury", alliance.key().as_ref()],
+        bump = alliance_treasury.bump,
+        has_one = alliance @ GameStateError::InvalidAllianceMember
+    )]
+    pub alliance_treasury: Account<'info, AllianceTreasuryState>,
+    #[account(
+        mut,
+        seeds = [b"system_sovereignty".as_ref(), galaxy.to_le_bytes().as_ref(), system.to_le_bytes().as_ref()],
+        bump = sovereignty.bump,
+        has_one = alliance @ GameStateError::InvalidAllianceMember,
+        constraint = sovereignty.galaxy == galaxy @ GameStateError::InvalidSovereigntySystem,
+        constraint = sovereignty.system == system @ GameStateError::InvalidSovereigntySystem
+    )]
+    pub sovereignty: Account<'info, SystemSovereignty>,
+}
+
+#[derive(Accounts)]
+#[instruction(galaxy: u16, system: u16)]
+pub struct SetSystemSovereigntySpecialization<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub alliance: Account<'info, AllianceState>,
+    #[account(
+        seeds = [b"alliance_membership", authority.key().as_ref()],
+        bump = membership.bump,
+        has_one = authority @ GameStateError::Unauthorized,
+        has_one = alliance @ GameStateError::InvalidAllianceMember,
+        constraint = membership.role == 2 @ GameStateError::AllianceLeaderRequired
+    )]
+    pub membership: Account<'info, AllianceMembership>,
+    #[account(
+        mut,
+        seeds = [b"alliance_treasury", alliance.key().as_ref()],
+        bump = alliance_treasury.bump,
+        has_one = alliance @ GameStateError::InvalidAllianceMember
+    )]
+    pub alliance_treasury: Account<'info, AllianceTreasuryState>,
+    #[account(
+        mut,
+        seeds = [b"system_sovereignty".as_ref(), galaxy.to_le_bytes().as_ref(), system.to_le_bytes().as_ref()],
+        bump = sovereignty.bump,
+        has_one = alliance @ GameStateError::InvalidAllianceMember,
+        constraint = sovereignty.galaxy == galaxy @ GameStateError::InvalidSovereigntySystem,
+        constraint = sovereignty.system == system @ GameStateError::InvalidSovereigntySystem
+    )]
+    pub sovereignty: Account<'info, SystemSovereignty>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeAllianceGovernance<'info> {
+    pub admin: Signer<'info>,
+    #[account(mut)]
+    pub leader: Signer<'info>,
+    #[account(
+        seeds = [b"game_config"],
+        bump = game_config.bump,
+        has_one = admin @ GameStateError::Unauthorized
+    )]
+    pub game_config: Box<Account<'info, GameConfig>>,
+    #[account(
+        seeds = [b"gamesol_governance"],
+        bump = gamesol_governance.bump,
+        constraint = gamesol_governance.enabled @ GameStateError::GamesolGovernanceDisabled,
+        constraint = gamesol_governance.antimatter_mint == game_config.antimatter_mint @ GameStateError::InvalidAntimatterMint
+    )]
+    pub gamesol_governance: Box<Account<'info, GamesolGovernanceConfig>>,
+    pub alliance: Box<Account<'info, AllianceState>>,
+    #[account(
+        seeds = [b"alliance_membership", leader.key().as_ref()],
+        bump = leader_membership.bump,
+        constraint = leader_membership.authority == leader.key() @ GameStateError::Unauthorized,
+        has_one = alliance @ GameStateError::InvalidAllianceMember,
+        constraint = leader_membership.role == 2 @ GameStateError::AllianceLeaderRequired
+    )]
+    pub leader_membership: Box<Account<'info, AllianceMembership>>,
+    #[account(
+        init,
+        payer = leader,
+        space = ALLIANCE_GOVERNANCE_CONFIG_SPACE,
+        seeds = [b"alliance_governance", alliance.key().as_ref()],
+        bump
+    )]
+    pub governance_config: Box<Account<'info, AllianceGovernanceConfig>>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeGamesolGovernance<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(
+        seeds = [b"game_config"],
+        bump = game_config.bump,
+        has_one = admin @ GameStateError::Unauthorized
+    )]
+    pub game_config: Box<Account<'info, GameConfig>>,
+    #[account(
+        init,
+        payer = admin,
+        space = GAMESOL_GOVERNANCE_CONFIG_SPACE,
+        seeds = [b"gamesol_governance"],
+        bump
+    )]
+    pub gamesol_governance: Box<Account<'info, GamesolGovernanceConfig>>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct EnrollAllianceInGamesolGovernance<'info> {
+    #[account(mut)]
+    pub leader: Signer<'info>,
+    pub alliance: Box<Account<'info, AllianceState>>,
+    #[account(
+        seeds = [b"alliance_membership", leader.key().as_ref()],
+        bump = leader_membership.bump,
+        constraint = leader_membership.authority == leader.key() @ GameStateError::Unauthorized,
+        has_one = alliance @ GameStateError::InvalidAllianceMember,
+        constraint = leader_membership.role == 2 @ GameStateError::AllianceLeaderRequired
+    )]
+    pub leader_membership: Box<Account<'info, AllianceMembership>>,
+    #[account(
+        seeds = [b"gamesol_governance"],
+        bump = gamesol_governance.bump,
+        constraint = gamesol_governance.enabled @ GameStateError::GamesolGovernanceDisabled
+    )]
+    pub gamesol_governance: Box<Account<'info, GamesolGovernanceConfig>>,
+    #[account(
+        init,
+        payer = leader,
+        space = ALLIANCE_GOVERNANCE_CONFIG_SPACE,
+        seeds = [b"alliance_governance", alliance.key().as_ref()],
+        bump
+    )]
+    pub governance_config: Box<Account<'info, AllianceGovernanceConfig>>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SyncAllianceGamesolGovernance<'info> {
+    pub leader: Signer<'info>,
+    pub alliance: Box<Account<'info, AllianceState>>,
+    #[account(
+        seeds = [b"alliance_membership", leader.key().as_ref()],
+        bump = leader_membership.bump,
+        constraint = leader_membership.authority == leader.key() @ GameStateError::Unauthorized,
+        has_one = alliance @ GameStateError::InvalidAllianceMember,
+        constraint = leader_membership.role == 2 @ GameStateError::AllianceLeaderRequired
+    )]
+    pub leader_membership: Box<Account<'info, AllianceMembership>>,
+    #[account(
+        seeds = [b"gamesol_governance"],
+        bump = gamesol_governance.bump,
+        constraint = gamesol_governance.enabled @ GameStateError::GamesolGovernanceDisabled
+    )]
+    pub gamesol_governance: Box<Account<'info, GamesolGovernanceConfig>>,
+    #[account(
+        mut,
+        seeds = [b"alliance_governance", alliance.key().as_ref()],
+        bump = governance_config.bump,
+        has_one = alliance @ GameStateError::InvalidAllianceMember
+    )]
+    pub governance_config: Box<Account<'info, AllianceGovernanceConfig>>,
+}
+
+#[derive(Accounts)]
+#[instruction(proposal_id: u64)]
+pub struct CreateAllianceDecision<'info> {
+    #[account(mut)]
+    pub proposer: Signer<'info>,
+    pub alliance: Box<Account<'info, AllianceState>>,
+    #[account(
+        seeds = [b"alliance_membership", proposer.key().as_ref()],
+        bump = membership.bump,
+        constraint = membership.authority == proposer.key() @ GameStateError::Unauthorized,
+        has_one = alliance @ GameStateError::InvalidAllianceMember,
+        constraint = membership.role > 0 @ GameStateError::InvalidAllianceMember
+    )]
+    pub membership: Box<Account<'info, AllianceMembership>>,
+    #[account(
+        mut,
+        seeds = [b"alliance_governance", alliance.key().as_ref()],
+        bump = governance_config.bump,
+        has_one = alliance @ GameStateError::InvalidAllianceMember,
+        constraint = governance_config.enabled @ GameStateError::AllianceGovernanceDisabled,
+        constraint = governance_config.version == ALLIANCE_GOVERNANCE_VERSION @ GameStateError::AllianceGovernanceOutOfSync
+    )]
+    pub governance_config: Box<Account<'info, AllianceGovernanceConfig>>,
+    #[account(
+        init,
+        payer = proposer,
+        space = ALLIANCE_DECISION_SPACE,
+        seeds = [b"alliance_decision", alliance.key().as_ref(), proposal_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub decision: Box<Account<'info, AllianceDecision>>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(proposal_id: u64, galaxy: u16, system: u16)]
+pub struct ExecuteAllianceDecision<'info> {
+    #[account(mut)]
+    pub governance_executor: Signer<'info>,
+    pub alliance: Box<Account<'info, AllianceState>>,
+    #[account(
+        seeds = [b"game_config"],
+        bump = game_config.bump,
+        constraint = game_config.antimatter_mint == governance_config.antimatter_mint @ GameStateError::InvalidAntimatterMint
+    )]
+    pub game_config: Box<Account<'info, GameConfig>>,
+    #[account(
+        seeds = [b"alliance_governance", alliance.key().as_ref()],
+        bump = governance_config.bump,
+        has_one = alliance @ GameStateError::InvalidAllianceMember,
+        constraint = governance_config.enabled @ GameStateError::AllianceGovernanceDisabled,
+        constraint = governance_config.version == ALLIANCE_GOVERNANCE_VERSION @ GameStateError::AllianceGovernanceOutOfSync,
+        constraint = governance_config.governance_executor == governance_executor.key() @ GameStateError::InvalidGovernanceExecutor
+    )]
+    pub governance_config: Box<Account<'info, AllianceGovernanceConfig>>,
+    #[account(
+        mut,
+        seeds = [b"alliance_decision", alliance.key().as_ref(), proposal_id.to_le_bytes().as_ref()],
+        bump = decision.bump,
+        has_one = alliance @ GameStateError::InvalidAllianceMember,
+        constraint = decision.id == proposal_id @ GameStateError::InvalidAllianceDecision
+    )]
+    pub decision: Box<Account<'info, AllianceDecision>>,
+    #[account(
+        mut,
+        seeds = [b"alliance_treasury", alliance.key().as_ref()],
+        bump = alliance_treasury.bump,
+        has_one = alliance @ GameStateError::InvalidAllianceMember
+    )]
+    pub alliance_treasury: Box<Account<'info, AllianceTreasuryState>>,
+    #[account(constraint = planet_state.key() == decision.target_planet @ GameStateError::InvalidAllianceDecision)]
+    pub planet_state: Box<Account<'info, PlanetState>>,
+    #[account(
+        seeds = [b"alliance_membership", planet_state.authority.as_ref()],
+        bump = claimant_membership.bump,
+        constraint = claimant_membership.authority == planet_state.authority @ GameStateError::Unauthorized,
+        has_one = alliance @ GameStateError::InvalidAllianceMember
+    )]
+    pub claimant_membership: Box<Account<'info, AllianceMembership>>,
+    #[account(
+        init_if_needed,
+        payer = governance_executor,
+        space = SYSTEM_SOVEREIGNTY_SPACE,
+        seeds = [b"system_sovereignty".as_ref(), galaxy.to_le_bytes().as_ref(), system.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub sovereignty: Box<Account<'info, SystemSovereignty>>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

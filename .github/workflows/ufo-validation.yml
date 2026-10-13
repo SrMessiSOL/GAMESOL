@@ -2,7 +2,7 @@ name: UFO on-chain validation
 
 on:
   push:
-    branches: [fix/friendly-space-travel]
+    branches: [feat/passkey-ufo-devnet]
     paths: [programs/game-state/**, Cargo.lock, scripts/ufo-validator-test.cjs, .github/workflows/ufo-validation.yml]
   workflow_dispatch:
 
@@ -46,13 +46,13 @@ jobs:
           export NODE_PATH="$RUNNER_TEMP/ufo-js/node_modules"
           export UFO_TEST_FIXTURE_DIR="$RUNNER_TEMP/ufo-fixtures"
           config_address=$(node scripts/ufo-validator-test.cjs --prepare)
-          solana-test-validator --reset --ledger "$RUNNER_TEMP/ufo-ledger" --account "$config_address" "$UFO_TEST_FIXTURE_DIR/game-config.json" --bpf-program FJGxh6SKgNoTVzHj98oBsC2oaEy8ovadVJf8rDUNaEHb target/deploy/game_state.so > "$RUNNER_TEMP/ufo-validator.log" 2>&1 &
+          solana-test-validator --reset --ledger "$RUNNER_TEMP/ufo-ledger" --account "$config_address" "$UFO_TEST_FIXTURE_DIR/game-config.json" --bpf-program J6rNikvM7XLs6REtbbhMhe8NVd6Nfqa1C7PDfgHSDFkq target/deploy/game_state.so > "$RUNNER_TEMP/ufo-validator.log" 2>&1 &
           validator_pid=$!
           trap 'kill "$validator_pid" || true' EXIT
           node scripts/ufo-validator-test.cjs
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: ufo-game-state-sbf
+          name: ufo-passkey-game-state-sbf
           path: target/deploy/game_state.so
           if-no-files-found: error
           retention-days: 7

@@ -1,11 +1,12 @@
 use anchor_lang::prelude::*;
 
 use crate::state::{
-    AllianceJoinRequest, AllianceMembership, AllianceMetadata, AllianceState,
-    AllianceTreasuryState, AuthorizedVault, FaucetClaim, GameConfig, PlanetCoordinates, PlanetState,
-    PlanetOwnerIndex, PlanetOwnershipRegistry, PlayerProfile, PublicPlanetCoordinates, PublicPlanetState, QuestProgressState,
-    QuestRewardTargetState, QuestState, StoreConfig, StorePurchaseState, TutorialQuestRewardTargetState,
-    VaultBackup,
+    AllianceDecision, AllianceGovernanceConfig, AllianceJoinRequest, AllianceMembership,
+    AllianceMetadata, AllianceState, AllianceTreasuryState, AuthorizedVault, FaucetClaim,
+    GameConfig, GamesolGovernanceConfig, LazorPlayerProfile, PlanetCoordinates, PlanetOwnerIndex,
+    PlanetOwnershipRegistry, PlanetState, PlayerProfile, PublicPlanetCoordinates,
+    PublicPlanetState, QuestProgressState, QuestRewardTargetState, QuestState, StoreConfig,
+    StorePurchaseState, SystemSovereignty, TutorialQuestRewardTargetState, VaultBackup,
 };
 
 pub const MAX_PLANET_NAME_LEN: usize = 32;
@@ -34,8 +35,10 @@ pub const ANTIMATTER_DECIMALS: u8 = 6;
 pub const ANTIMATTER_SCALE: u64 = 1_000_000;
 pub const ANTIMATTER_FAUCET_AMOUNT: u64 = 10_000 * ANTIMATTER_SCALE;
 pub const ANTIMATTER_FAUCET_COOLDOWN_SECONDS: i64 = 24 * 60 * 60;
-pub const ALLIANCE_CREATE_USDC_COST: u64 = 500_000_000;
-pub const ALLIANCE_CREATE_ANTIMATTER_COST: u64 = 100_000 * ANTIMATTER_SCALE;
+// Isolated sovereignty devnet economics. Production keeps the original
+// 500 USDC / 100,000 ANTIMATTER alliance-creation threshold.
+pub const ALLIANCE_CREATE_USDC_COST: u64 = 100_000_000;
+pub const ALLIANCE_CREATE_ANTIMATTER_COST: u64 = 5_000 * ANTIMATTER_SCALE;
 pub const ALLIANCE_CREATE_ANTIMATTER_BURN: u64 = ALLIANCE_CREATE_ANTIMATTER_COST / 2;
 pub const ALLIANCE_CREATE_ANTIMATTER_TREASURY: u64 =
     ALLIANCE_CREATE_ANTIMATTER_COST - ALLIANCE_CREATE_ANTIMATTER_BURN;
@@ -64,6 +67,8 @@ pub const BASE_STORAGE_CAP: u64 = 10_000;
 pub const PLANET_COORDS_SPACE: usize = 8 + PlanetCoordinates::INIT_SPACE;
 pub const PUBLIC_PLANET_COORDS_SPACE: usize = 8 + PublicPlanetCoordinates::INIT_SPACE;
 pub const PLAYER_PROFILE_SPACE: usize = 8 + PlayerProfile::INIT_SPACE;
+pub const LAZOR_PLAYER_PROFILE_SPACE: usize = 8 + LazorPlayerProfile::INIT_SPACE;
+pub const LAZOR_PLAYER_SCHEMA_VERSION: u8 = 2;
 pub const PLANET_OWNER_INDEX_SPACE: usize = 8 + PlanetOwnerIndex::INIT_SPACE;
 pub const PLANET_OWNERSHIP_REGISTRY_SPACE: usize = 8 + PlanetOwnershipRegistry::INIT_SPACE;
 pub const PLANET_STATE_SPACE: usize = 8 + PlanetState::INIT_SPACE;
@@ -79,15 +84,54 @@ pub const QUEST_PROGRESS_STATE_SPACE: usize = 8 + QuestProgressState::INIT_SPACE
 pub const QUEST_REWARD_TARGET_STATE_SPACE: usize = 8 + QuestRewardTargetState::INIT_SPACE;
 pub const TUTORIAL_QUEST_REWARD_TARGET_STATE_SPACE: usize =
     8 + TutorialQuestRewardTargetState::INIT_SPACE;
+/// Upper bound for a voluntary rent contribution routed through the program.
+/// The paymaster applies the stricter command- and simulation-level policy.
+pub const MAX_SPONSORED_RENT_LAMPORTS: u64 = 50_000_000;
 pub const ALLIANCE_STATE_SPACE: usize = 8 + AllianceState::INIT_SPACE;
 pub const ALLIANCE_METADATA_SPACE: usize = 8 + AllianceMetadata::INIT_SPACE;
 pub const ALLIANCE_TREASURY_SPACE: usize = 8 + AllianceTreasuryState::INIT_SPACE;
 pub const ALLIANCE_MEMBERSHIP_SPACE: usize = 8 + AllianceMembership::INIT_SPACE;
 pub const ALLIANCE_JOIN_REQUEST_SPACE: usize = 8 + AllianceJoinRequest::INIT_SPACE;
+pub const SYSTEM_SOVEREIGNTY_SPACE: usize = 8 + SystemSovereignty::INIT_SPACE;
+pub const GAMESOL_GOVERNANCE_CONFIG_SPACE: usize = 8 + GamesolGovernanceConfig::INIT_SPACE;
+pub const ALLIANCE_GOVERNANCE_CONFIG_SPACE: usize = 8 + AllianceGovernanceConfig::INIT_SPACE;
+pub const ALLIANCE_DECISION_SPACE: usize = 8 + AllianceDecision::INIT_SPACE;
+pub const SYSTEM_SOVEREIGNTY_VERSION: u8 = 1;
+pub const GAMESOL_GOVERNANCE_VERSION: u8 = 1;
+// Version 2 certifies that the alliance configuration was initialized from or
+// synchronized with the shared GAMESOL governance root. The instruction
+// account layouts remain compatible with already-created Squads transactions.
+pub const ALLIANCE_GOVERNANCE_VERSION: u8 = 2;
+pub const ALLIANCE_DECISION_VERSION: u8 = 1;
+pub const ALLIANCE_DECISION_CLAIM_SYSTEM: u8 = 0;
+pub const ALLIANCE_DECISION_FUND_UPKEEP: u8 = 1;
+pub const ALLIANCE_DECISION_SET_SPECIALIZATION: u8 = 2;
+pub const MAX_ALLIANCE_DECISION_ACTION: u8 = ALLIANCE_DECISION_SET_SPECIALIZATION;
+pub const MAX_ALLIANCE_DECISION_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
+pub const SYSTEM_SOVEREIGNTY_UPKEEP_SECONDS: i64 = 7 * 24 * 60 * 60;
+// Devnet sovereignty experiment: keep every debit real while making the full
+// proposal -> market -> execution loop testable from a fresh homeworld.
+// Production retains the original 100k/50k/25k economy thresholds.
+pub const SYSTEM_SOVEREIGNTY_CLAIM_METAL: u64 = 100;
+pub const SYSTEM_SOVEREIGNTY_CLAIM_CRYSTAL: u64 = 50;
+pub const SYSTEM_SOVEREIGNTY_CLAIM_DEUTERIUM: u64 = 25;
+pub const SYSTEM_SOVEREIGNTY_UPKEEP_METAL: u64 = 25;
+pub const SYSTEM_SOVEREIGNTY_UPKEEP_CRYSTAL: u64 = 15;
+pub const SYSTEM_SOVEREIGNTY_UPKEEP_DEUTERIUM: u64 = 10;
+pub const SYSTEM_SOVEREIGNTY_SPECIALIZATION_METAL: u64 = 20;
+pub const SYSTEM_SOVEREIGNTY_SPECIALIZATION_CRYSTAL: u64 = 20;
+pub const SYSTEM_SOVEREIGNTY_SPECIALIZATION_DEUTERIUM: u64 = 10;
+pub const MAX_SYSTEM_SPECIALIZATION: u8 = 3;
+pub const SYSTEM_SPECIALIZATION_INDUSTRIAL: u8 = 1;
+pub const SYSTEM_SPECIALIZATION_RESEARCH: u8 = 2;
+pub const SYSTEM_SPECIALIZATION_MILITARY: u8 = 3;
+pub const INDUSTRIAL_BUILD_SPEED_BONUS_BPS: u16 = 1_000;
+pub const RESEARCH_SPEED_BONUS_BPS: u16 = 1_500;
+pub const MILITARY_BUILD_SPEED_BONUS_BPS: u16 = 1_500;
 pub const BASE_ALLIANCE_MAX_MEMBERS: u16 = 5;
 pub const ALLIANCE_MEMBERS_PER_LEVEL: u16 = 3;
 pub const ALLIANCE_XP_UNIT: u64 = 1_000;
 pub const MARKET_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
-    190, 82, 37, 232, 28, 50, 248, 91, 61, 49, 15, 43, 213, 115, 237, 81, 239, 139, 230, 221, 59,
-    251, 31, 76, 160, 16, 0, 153, 247, 21, 15, 41,
+    84, 163, 170, 61, 4, 172, 20, 4, 48, 103, 146, 235, 200, 253, 197, 56, 244, 102, 208, 21,
+    151, 224, 4, 142, 30, 137, 144, 19, 11, 22, 57, 77,
 ]);
