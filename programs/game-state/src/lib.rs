@@ -17,6 +17,13 @@ declare_id!("J6rNikvM7XLs6REtbbhMhe8NVd6Nfqa1C7PDfgHSDFkq");
 
 #[program]
 pub mod game_state {
+    pub fn set_commander_identity(ctx: Context<SetCommanderIdentity>, proof: UfoProof) -> Result<()> {
+        ufo::set_commander_identity(ctx, proof)
+    }
+
+    pub fn clear_commander_identity(ctx: Context<ClearCommanderIdentity>) -> Result<()> {
+        ufo::clear_commander_identity(ctx)
+    }
     use super::*;
 
     pub fn configure_ufo(ctx: Context<ConfigureUfo>, attestor: Pubkey, enabled: bool) -> Result<()> {

@@ -70,6 +70,38 @@ async function ready() {
   }
   throw new Error('Encounter did not become ready in the validator.');
 }
+async function commanderIdentityTests() {
+  const address=pda('commander_identity',commander.publicKey);
+  const read=async()=>{const account=await rpc.getAccountInfo(address);assert(account);assert(account.owner.equals(PROGRAM));return account.data;};
+  const selection=(nonce,options={})=>{
+    const proof=Buffer.concat([holder.toBuffer(),asset.toBuffer(),u64(nonce),Buffer.from([1,5]),Buffer.alloc(64),i64(options.expires??Math.floor(Date.now()/1000)+90)]);
+    const message=Buffer.concat([Buffer.from(options.domain??'gamesol:commander:devnet:v1'),PROGRAM.toBuffer(),COLLECTION.toBuffer(),(options.commander??commander.publicKey).toBuffer(),proof]);
+    const signing=options.issuer??issuer;
+    const privateKey=crypto.createPrivateKey({key:Buffer.concat([Buffer.from('302e020100300506032b657004220420','hex'),Buffer.from(signing.secretKey.subarray(0,32))]),format:'der',type:'pkcs8'});
+    return [Ed25519Program.createInstructionWithPublicKey({publicKey:signing.publicKey.toBytes(),message,signature:crypto.sign(null,message,privateKey)}),instruction('set_commander_identity',[
+      key(commander.publicKey,true,true),key(pda('player_profile',commander.publicKey)),key(pda('ufo_config')),key(address,true),key(SYSVAR_INSTRUCTIONS_PUBKEY),key(SystemProgram.programId)
+    ],proof)];
+  };
+  await rejected(()=>send(commander,selection(0,{issuer:Keypair.generate()})),'avatar rejects untrusted attestor');
+  await rejected(()=>send(commander,selection(0,{domain:'gamesol:ufo:devnet:v1'})),'expedition proof cannot select an avatar');
+  await rejected(()=>send(commander,selection(0,{commander:other.publicKey})),'avatar proof cannot cross game accounts');
+  await rejected(()=>send(commander,selection(0,{expires:1})),'avatar rejects expired proof');
+  const first=selection(0);await send(commander,first);
+  let data=await read();assert.equal(data.readBigUInt64LE(40),1n);assert(new PublicKey(data.subarray(80,112)).equals(asset));
+  await rejected(()=>send(commander,first),'avatar selection cannot replay');
+  const before=await rpc.getAccountInfo(pda('ufo_loadout',commander.publicKey));
+  await send(commander,selection(1));
+  const after=await rpc.getAccountInfo(pda('ufo_loadout',commander.publicKey));
+  assert.deepEqual(after?.data,before?.data,'avatar selection must not mutate expedition or loot');
+  const clear=signer=>instruction('clear_commander_identity',[key(signer.publicKey,false,true),key(address,true)]);
+  await rejected(()=>send(other,[clear(other)]),'another commander cannot clear avatar');
+  await send(commander,[clear(commander)]);
+  data=await read();assert.equal(data.readBigUInt64LE(40),3n);assert(new PublicKey(data.subarray(80,112)).equals(PublicKey.default));
+  await rejected(()=>send(commander,first),'clearing avatar does not revive old proofs');
+  await send(commander,selection(3));
+  assert.equal((await read()).readBigUInt64LE(40),4n);
+  console.log('PASS: independent persistent commander identity and monotonic clear/reselect');
+}
 async function main() {
   for(let attempt=0;attempt<60;attempt++) { try { await rpc.getVersion();break; }catch(error){if(attempt===59)throw error;await new Promise(resolve=>setTimeout(resolve,1000));} }
   for(const signer of [admin,commander,other]) { const signature=await rpc.requestAirdrop(signer.publicKey,3_000_000_000);await rpc.confirmTransaction(signature); }
@@ -99,6 +131,7 @@ async function main() {
   const equip=index=>instruction('equip_ufo_loot',[key(commander.publicKey,false,true),key(pda('ufo_loadout',commander.publicKey),true)],Buffer.from([index]));
   await rejected(()=>send(commander,[equip(99)]),'unearned cosmetic cannot be equipped');
   await send(commander,[equip(0)]);assert.equal((await state()).equipped,0);
+  await commanderIdentityTests();
   await rejected(async()=>send(commander,await attested(commander,'start')),'commander daily cooldown remains after claim');
   console.log('PASS: on-chain expedition -> booster -> completion -> unique loot -> equip');
 }

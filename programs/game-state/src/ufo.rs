@@ -10,6 +10,7 @@ pub const UFO_COLLECTION: Pubkey = Pubkey::new_from_array([
     230, 72, 1, 150, 1, 194, 91, 219, 93, 61, 230,
 ]);
 pub const UFO_DOMAIN: &[u8] = b"gamesol:ufo:devnet:v1";
+pub const COMMANDER_DOMAIN: &[u8] = b"gamesol:commander:devnet:v1";
 pub const UFO_COOLDOWN: i64 = 86_400;
 pub const UFO_STAGE_DELAY: i64 = 15;
 pub const UFO_MAX_LOOT: usize = 24;
@@ -25,6 +26,39 @@ pub struct UfoConfig {
 #[derive(InitSpace)]
 pub struct UfoUse {
     pub last_started: i64,
+}
+
+#[account]
+#[derive(InitSpace, Default)]
+pub struct CommanderIdentity {
+    pub commander: Pubkey,
+    pub nonce: u64,
+    pub owner: Pubkey,
+    pub asset: Pubkey,
+    pub verified_at: i64,
+}
+
+#[derive(Accounts)]
+pub struct SetCommanderIdentity<'info> {
+    #[account(mut)]
+    pub commander: Signer<'info>,
+    #[account(seeds=[b"player_profile", commander.key().as_ref()], bump=player_profile.bump, constraint=player_profile.authority==commander.key())]
+    pub player_profile: Account<'info, PlayerProfile>,
+    #[account(seeds=[b"ufo_config"], bump)]
+    pub config: Account<'info, UfoConfig>,
+    #[account(init_if_needed, payer=commander, space=8+CommanderIdentity::INIT_SPACE, seeds=[b"commander_identity", commander.key().as_ref()], bump)]
+    pub identity: Account<'info, CommanderIdentity>,
+    /// CHECK: fixed instructions sysvar; ownership proof uses a separate domain.
+    #[account(address=anchor_lang::solana_program::sysvar::instructions::ID)]
+    pub instructions: UncheckedAccount<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ClearCommanderIdentity<'info> {
+    pub commander: Signer<'info>,
+    #[account(mut, seeds=[b"commander_identity", commander.key().as_ref()], bump, has_one=commander)]
+    pub identity: Account<'info, CommanderIdentity>,
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace, PartialEq, Eq, Debug)]
@@ -143,7 +177,11 @@ pub enum UfoError {
 }
 
 pub fn proof_message(commander: Pubkey, proof: &UfoProof) -> Vec<u8> {
-    let mut message = UFO_DOMAIN.to_vec();
+    scoped_proof_message(UFO_DOMAIN, commander, proof)
+}
+
+fn scoped_proof_message(domain: &[u8], commander: Pubkey, proof: &UfoProof) -> Vec<u8> {
+    let mut message = domain.to_vec();
     message.extend_from_slice(crate::ID.as_ref());
     message.extend_from_slice(UFO_COLLECTION.as_ref());
     message.extend_from_slice(commander.as_ref());
@@ -181,6 +219,18 @@ fn verify_proof(
     ix: &AccountInfo,
     now: i64,
 ) -> Result<()> {
+    verify_scoped_proof(UFO_DOMAIN, config, commander, proof, nonce, ix, now)
+}
+
+fn verify_scoped_proof(
+    domain: &[u8],
+    config: &UfoConfig,
+    commander: Pubkey,
+    proof: &UfoProof,
+    nonce: u64,
+    ix: &AccountInfo,
+    now: i64,
+) -> Result<()> {
     require!(config.enabled, UfoError::Disabled);
     require!(proof.nonce == nonce, UfoError::Replay);
     require!(
@@ -190,7 +240,11 @@ fn verify_proof(
             && proof.route <= 5,
         UfoError::InvalidProof
     );
-    let message = proof_message(commander, proof);
+    require!(
+        proof.owner != Pubkey::default() && proof.asset != Pubkey::default(),
+        UfoError::InvalidProof
+    );
+    let message = scoped_proof_message(domain, commander, proof);
     let current = load_current_index_checked(ix)?;
     for index in 0..usize::from(current) {
         let instruction = load_instruction_at_checked(index, ix)?;
@@ -202,6 +256,58 @@ fn verify_proof(
         }
     }
     err!(UfoError::InvalidProof)
+}
+
+fn update_identity(
+    identity: &mut CommanderIdentity,
+    commander: Pubkey,
+    proof: &UfoProof,
+    now: i64,
+) -> Result<()> {
+    require!(
+        identity.commander == Pubkey::default() || identity.commander == commander,
+        UfoError::InvalidProof
+    );
+    require!(identity.nonce == proof.nonce, UfoError::Replay);
+    let next_nonce = identity.nonce.checked_add(1).ok_or(UfoError::Replay)?;
+    identity.commander = commander;
+    identity.nonce = next_nonce;
+    identity.owner = proof.owner;
+    identity.asset = proof.asset;
+    identity.verified_at = now;
+    Ok(())
+}
+
+pub fn set_commander_identity(ctx: Context<SetCommanderIdentity>, proof: UfoProof) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
+    verify_scoped_proof(
+        COMMANDER_DOMAIN,
+        &ctx.accounts.config,
+        ctx.accounts.commander.key(),
+        &proof,
+        ctx.accounts.identity.nonce,
+        &ctx.accounts.instructions.to_account_info(),
+        now,
+    )?;
+    update_identity(
+        &mut ctx.accounts.identity,
+        ctx.accounts.commander.key(),
+        &proof,
+        now,
+    )
+}
+
+fn clear_identity(identity: &mut CommanderIdentity) -> Result<()> {
+    identity.nonce = identity.nonce.checked_add(1).ok_or(UfoError::Replay)?;
+    identity.owner = Pubkey::default();
+    identity.asset = Pubkey::default();
+    identity.verified_at = 0;
+    Ok(())
+}
+
+pub fn clear_commander_identity(ctx: Context<ClearCommanderIdentity>) -> Result<()> {
+    // Keep the account and nonce so clearing cannot revive old selection proofs.
+    clear_identity(&mut ctx.accounts.identity)
 }
 
 pub fn configure(ctx: Context<ConfigureUfo>, attestor: Pubkey, enabled: bool) -> Result<()> {
@@ -403,6 +509,79 @@ pub fn abort(ctx: Context<ManageUfo>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn identity_proof() -> UfoProof {
+        UfoProof {
+            owner: Pubkey::new_unique(),
+            asset: Pubkey::new_unique(),
+            nonce: 0,
+            doctrine: 1,
+            route: 0,
+            accessory: [0; 32],
+            hair: [0; 32],
+            expires: 120,
+        }
+    }
+
+    #[test]
+    fn commander_proof_is_bound_to_action_and_game_account() {
+        let commander = Pubkey::new_unique();
+        let proof = identity_proof();
+        let message = scoped_proof_message(COMMANDER_DOMAIN, commander, &proof);
+        assert_ne!(message, proof_message(commander, &proof));
+        assert_ne!(
+            message,
+            scoped_proof_message(COMMANDER_DOMAIN, Pubkey::new_unique(), &proof)
+        );
+        let mut changed = proof.clone();
+        changed.asset = Pubkey::new_unique();
+        assert_ne!(
+            message,
+            scoped_proof_message(COMMANDER_DOMAIN, commander, &changed)
+        );
+        changed = proof.clone();
+        changed.owner = Pubkey::new_unique();
+        assert_ne!(
+            message,
+            scoped_proof_message(COMMANDER_DOMAIN, commander, &changed)
+        );
+    }
+
+    #[test]
+    fn commander_clear_preserves_replay_protection() {
+        let commander = Pubkey::new_unique();
+        let mut identity = CommanderIdentity::default();
+        let mut proof = identity_proof();
+        update_identity(&mut identity, commander, &proof, 1).unwrap();
+        assert_eq!(identity.asset, proof.asset);
+        assert_eq!(identity.verified_at, 1);
+        assert!(update_identity(&mut identity, commander, &proof, 2).is_err());
+        clear_identity(&mut identity).unwrap();
+        assert_eq!(identity.commander, commander);
+        assert_eq!(identity.nonce, 2);
+        assert_eq!(identity.asset, Pubkey::default());
+        assert!(update_identity(&mut identity, commander, &proof, 3).is_err());
+        proof.nonce = 2;
+        assert!(update_identity(&mut identity, Pubkey::new_unique(), &proof, 3).is_err());
+        update_identity(&mut identity, commander, &proof, 3).unwrap();
+        assert_eq!(identity.nonce, 3);
+    }
+
+    #[test]
+    fn commander_nonce_exhaustion_does_not_modify_selection() {
+        let commander = Pubkey::new_unique();
+        let mut identity = CommanderIdentity {
+            commander,
+            nonce: u64::MAX,
+            ..Default::default()
+        };
+        let mut proof = identity_proof();
+        proof.nonce = u64::MAX;
+        assert!(update_identity(&mut identity, commander, &proof, 1).is_err());
+        assert_eq!(identity.asset, Pubkey::default());
+        assert!(clear_identity(&mut identity).is_err());
+        assert_eq!(identity.nonce, u64::MAX);
+    }
+
     fn mission() -> UfoLoadout {
         UfoLoadout {
             commander: Pubkey::new_unique(),
